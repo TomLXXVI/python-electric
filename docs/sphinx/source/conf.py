@@ -1,9 +1,9 @@
 import os
 import sys
 
+SRC_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../src"))
 
-PROJECT_ROOT = os.path.abspath(os.path.join(__file__, "../../..", ".."))
-sys.path.insert(0, PROJECT_ROOT)
+sys.path.insert(0, SRC_PATH)
 
 
 # Configuration file for the Sphinx documentation builder.
@@ -39,6 +39,4 @@ exclude_patterns = []
 html_theme = 'sphinx_rtd_theme'
 html_static_path = ['_static']
 
-autodoc_mock_imports = [
-    "pint",
-]
+# autodoc_mock_imports = []
