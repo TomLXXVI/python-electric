@@ -13,7 +13,7 @@ and aligned with IEC standards, enabling engineers to perform:
 * Earthing system verification including protection against electric shock due 
   to indirect contact
 
-An example Jupyter notebook is provided (`ex4_installation_sizing_01.ipynb`) 
+An example Jupyter notebook is provided (`ex1_sizing_LV_network_01.ipynb`) 
 demonstrating the workflow and the steps that are taken in the design of a 
 low-voltage electrical network. This notebook reproduces a worked example from 
 the reference book *Laagspanningsinstallaties: technologie en ontwerp*.
