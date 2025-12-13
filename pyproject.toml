@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "python-electric"
+version = "0.1.0"
+description = "Tools for designing electrical installations in buildings."
+readme = "README.md"
+requires-python = ">=3.10"
+
+authors = [
+  { name = "Tom Christiaens" }
+]
+
+license = { text = "MIT" }
+
+keywords = ["electrical", "power systems", "building installations", "AREI"]
+
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "pint",
+    "numpy",
+    "matplotlib",
+    "ipython",
+    "pandas",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "jupyter"
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
