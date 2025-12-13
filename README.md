@@ -18,7 +18,6 @@ demonstrating the workflow and the steps that are taken in the design of a
 low-voltage electrical network. This notebook reproduces a worked example from 
 the reference book *Laagspanningsinstallaties: technologie en ontwerp*.
 
----
 
 ## Limitations
 
@@ -28,14 +27,12 @@ the reference book *Laagspanningsinstallaties: technologie en ontwerp*.
   (back-up protection) are outside scope.
 * The package currently supports only **TN earthing systems**.
 
----
 
 ## License
 
 This project is licensed under the MIT License. See the LICENSE file for 
 details.
 
----
 
 ## Disclaimer
 
