@@ -2,7 +2,8 @@
 Cable sizing and impedance calculation.
 
 Integrates the sizing routine and impedance calculation of a cable inside a
-single class `Cable`.
+single class `AbstractCable` from which concrete classes `ThreePhaseCable` and
+`SinglePhaseCable` are derived.
 
 References
 ----------
@@ -135,7 +136,7 @@ class AbstractCable(ABC):
         Cross-sectional area of the protective earth conductor. By default, this
         cross-sectional area is set equal to the cross-sectional area of the
         loaded cable conductors.
-    earthing_system: EarthingScheme, default E
+    earthing_system: EarthingScheme, default EarthingScheme.TN
         Indicates the earthing system of the low-voltage system. By default,
         this is set to the TN-earthing system.
 
@@ -226,8 +227,10 @@ class AbstractCable(ABC):
     U_phase: Quantity = field(init=False, default=None)
 
     def __post_init__(self):
+        # Determine load current.
         self._calc_load_current()
 
+        # Size cable.
         if self.S is None:
             self._calculate_cable_sizing()
         else:
@@ -235,16 +238,18 @@ class AbstractCable(ABC):
             self._calculate_cable_sizing()
             if self.S.to('mm ** 2') > S_user.to('mm ** 2'):
                 raise ValueError(
-                    f"The given csa {S_user.to('mm ** 2'):~P.2f} is too small."
+                    f"The given csa {S_user.to('mm ** 2'):~P.2f} is too small. "
                     f"A csa of at least {self.S.to('mm ** 2'):~P.2f} is "
                     f"required."
-                )
+                ) from None
             else:
                 self._recalculate_cable_sizing(S_user)
 
+        # Set cross-sectional area of PE-conductor.
         if self.S_pe is None:
             self.S_pe = self.S
 
+        # Determine phase voltage.
         if self.phase_system.three_phase:
             self.U_phase = self.U_line / math.sqrt(3)
         else:
@@ -459,7 +464,9 @@ class AbstractCable(ABC):
         self,
         S_pe: Quantity | None = None,
         skin_condition: str = "BB2",
-        final_circuit: bool = True
+        final_circuit: bool = True,
+        neutral_distributed: bool = True,
+        R_e: Quantity | None = None
     ) -> IndirectContactProtectionResult | None:
         """
         Returns the requirements so that the circuit breaker to which the
@@ -477,6 +484,16 @@ class AbstractCable(ABC):
         final_circuit: bool, default True
             Indicates that the cable directly feeds a consumer (of which the
             nominal current does not exceed 32 A).
+        neutral_distributed: bool, default True
+            For IT-earthing systems only.
+            Indicates whether the neutral conductor is also distributed in the
+            network or not.
+        R_e: Quantity | None
+            For IT-earthing systems only.
+            Spreading resistance of the earth electrodes in case the two exposed
+            conductive parts in the fault loop are both connected to different,
+            separate earth electrodes. It is assumend that all earth electrodes
+            in the consumer installation have the same spreading resistance.
 
         Returns
         -------
@@ -492,6 +509,19 @@ class AbstractCable(ABC):
                 S_pe = self.S_pe if S_pe is None else S_pe,
                 skin_condition = skin_condition,
                 final_circuit = final_circuit
+            )
+        elif self.earthing_system.is_IT():
+            return earthing_system.IT.check_indirect_contact(
+                U_phase=self.U_phase,
+                L_cable=self.L,
+                S_phase=self.S,
+                conductor_material=self.conductor_material,
+                I_m_cb=self.circuit_breaker.I_m_max if self.circuit_breaker else None,
+                S_pe=self.S_pe if S_pe is None else S_pe,
+                skin_condition=skin_condition,
+                final_circuit=final_circuit,
+                neutral_distributed=neutral_distributed,
+                R_e=R_e
             )
         return None
 
@@ -628,22 +658,28 @@ def check_selectivity(
     Returns
     -------
     SelectivityResult
-        `exists` is True if current based selectivity exists between the
-        downstream and upstream circuit breaker, i.e., if the time-current
-        characteristic curve of the upstream circuit breaker is completely to
-        the right of the curve of the downstream circuit breaker.
-        `total` is True if current based selectivity exists, and the calculated
-        maximum short-circuit current in the downstream cable is smaller than
-        the minimum magnetic tripping current of the upstream circuit breaker.
-        `t_trip_max` and `t_margin` are set when the upstream circuit breaker is
-        of the industrial type and adjustable, current based selectivity
-        exists, but selectivity is not total. `t_trip_max` is the maximum
-        allowable tripping time of the upstream circuit breaker taking account
-        of the Joule-integral of the upstream cable, and also the maximum
-        allowable fault duration to ensure protection against indirect contact
-        (assuming a TN-earthing system). `t_margin` is the margin between
-        `t_trip_max` and `t_m_lim`, the instantaneous magnetic tripping time
-        limit of the circuit breaker.
+        exists: bool
+            Is True if current based selectivity exists between the downstream
+            and upstream circuit breaker, i.e., if the time-current
+            characteristic curve of the upstream circuit breaker is completely
+            to the right of the curve of the downstream circuit breaker.
+        total: bool
+            Is True if current based selectivity exists, and the calculated
+            maximum short-circuit current in the downstream cable is smaller
+            than the minimum magnetic tripping current of the upstream circuit
+            breaker.
+        t_trip_max: Quantity, optional
+        t_margin: Quantity, optional
+            Are set when the upstream circuit breaker is of the industrial type
+            and adjustable, current based selectivity exists, but selectivity is
+            not total.
+            `t_trip_max` is the maximum allowable tripping time of the upstream
+            circuit breaker taking account of the Joule-integral of the upstream
+            cable, and also the maximum allowable fault duration to ensure
+            protection against indirect contact (assuming a TN-earthing system).
+            `t_margin` is the margin between `t_trip_max` and `t_m_lim`, the
+            current instantaneous magnetic tripping time limit of the circuit
+            breaker.
 
     Notes
     -----

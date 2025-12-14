@@ -1,5 +1,3 @@
-from dataclasses import dataclass
-
 from python_electric import Quantity
 from python_electric.materials import (
     ConductorMaterials,
@@ -9,12 +7,14 @@ from python_electric.protection import SafetyCurve
 from .earthing_system import (
     EarthingSystem,
     get_max_allow_disconnect_time,
-    AbstractEarthingSystem,
     IndirectContactProtectionResult
 )
 
 __all__ = [
-    "TN"
+    "LineToExposedConductivePartFault",
+    "LineToExtraneousConductivePartFault",
+    "check_indirect_contact",
+    "check_earthing_resistance"
 ]
 
 Q_ = Quantity
@@ -227,164 +227,160 @@ class LineToExtraneousConductivePartFault:
         return t_c_max
 
 
-@dataclass
-class TN(AbstractEarthingSystem):
+def check_indirect_contact(
+    U_phase: Quantity,
+    L_cable: Quantity,
+    S_phase: Quantity,
+    conductor_material: ConductorMaterials,
+    I_m_cb: Quantity | None = None,
+    S_pe: Quantity | None = None,
+    skin_condition: str = "BB2",
+    final_circuit: bool = True
+) -> IndirectContactProtectionResult:
+    """
+    Determines the requirements so that a circuit breaker would also protect
+    against indirect contact in a low-voltage distribution network with
+    TN-earthing system when an insulation fault to an exposed conductive
+    part should happen.
 
-    @staticmethod
-    def check_indirect_contact(
-        U_phase: Quantity,
-        L_cable: Quantity,
-        S_phase: Quantity,
-        conductor_material: ConductorMaterials,
-        I_m_cb: Quantity | None = None,
-        S_pe: Quantity | None = None,
-        skin_condition: str = "BB2",
-        final_circuit: bool = True
-    ) -> IndirectContactProtectionResult:
-        """
-        Determines the requirements so that a circuit breaker would also protect
-        against indirect contact in a low-voltage distribution network with
-        TN-earthing system when an insulation fault to an exposed conductive
-        part should happen.
+    Parameters
+    ----------
+    U_phase: Quantity
+        Line-to-ground (phase) system voltage.
+    L_cable: Quantity.
+        Cable length measured from the electrical distribution board to the
+        electrical appliance with the exposed conductive part.
+    S_phase: Quantity
+        Cross-sectional area of the loaded phase conductors.
+    conductor_material: ConductorMaterials
+        Material the cable conductors are made of. See enum
+        ConductorMaterials in /materials.
+    I_m_cb: Quantity, optional
+        Maximum limit of the magnetic tripping current of the circuit
+        breaker. If not None, the maximum allowable length of the cable is
+        calculated so that the minimum short-circuit current at the end of
+        the cable equals the maximum limit of the magnetic trip current of
+        the circuit breaker.
+    S_pe: Quantity, optional
+        Cross-sectional area of the earth protective conductor. If None, `S_pe`
+        is set equal to `S_phase`.
+    skin_condition: str, {"BB1", "BB2" (default)}
+        Code that identifies the condition of the human skin: either dry
+        (BB1) or wet (BB2).
+    final_circuit: bool, default True
+        Indicates that the cable directly feeds a consumer (of which the
+        nominal current does not exceed 32 A).
 
-        Parameters
-        ----------
-        U_phase: Quantity
-            Line-to-ground (phase) system voltage.
-        L_cable: Quantity.
-            Cable length measured from the electrical distribution board to the
-            electrical appliance with the exposed conductive part.
-        S_phase: Quantity
-            Cross-sectional area of the loaded phase conductors.
-        conductor_material: ConductorMaterials
-            Material the cable conductors are made of. See enum
-            ConductorMaterials in /materials.
-        I_m_cb: Quantity, optional
-            Maximum limit of the magnetic tripping current of the circuit
-            breaker. If not None, the maximum allowable length of the cable is
-            calculated so that the minimum short-circuit current at the end of
-            the cable equals the maximum limit of the magnetic trip current of
+    Returns
+    -------
+    IndirectContactProtectionResult
+        I_f: Quantity | None
+            Fault current.
+        U_f: Quantity | None
+            Voltage (touch potential rise) between earth (0 V) and an
+            exposed conductive part of the low-voltage distribution network.
+        L_max: Quantity | None
+            Maximum allowable length of the cable between the distribution
+            board and the appliance/sub-distribution board, so that the
+            minimum short-circuit current calculated at the end of the cable
+            would equal the maximum limit of the magnetic trip current of
             the circuit breaker.
-        S_pe: Quantity, optional
-            Cross-sectional area of the earth protective conductor. If given, it
-            overrides the value of instance attribute `self.S_pe`.
-        skin_condition: str, {"BB1", "BB2" (default)}
-            Code that identifies the condition of the human skin: either dry
-            (BB1) or wet (BB2).
-        final_circuit: bool, default True
-            Indicates that the cable directly feeds a consumer (of which the
-            nominal current does not exceed 32 A).
+        t_c_max: Quantity | None
+            Maximum allowable contact duration with touch voltage according
+            to the applicable safety curve.
+        R_pe_max: Quantity | None
+            Maximum allowable resistance of the PE-conductor between the
+            main earthing terminal and the most distant exposed conductive
+            part in the distribution network, so that the fault current
+            would equal the maximum limit of the magnetic trip current of
+            the circuit breaker just upstream of the most distant exposed
+            conductive part.
+    """
+    fault = LineToExposedConductivePartFault(
+        U_phase=U_phase,
+        L=L_cable,
+        S_phase=S_phase,
+        S_pe=S_phase if S_pe is None else S_pe,
+        conductor_material=conductor_material
+    )
+    if I_m_cb is not None:
+        L_max = fault.L_max(I_m_cb)
+        R_pe_max = (fault.U_fault / I_m_cb).to('ohm')
+    else:
+        L_max = None
+        R_pe_max = None
+    safety_curve = SafetyCurve(
+        voltage_type="AC",
+        skin_condition=skin_condition
+    )
+    t_c_max = safety_curve.max_contact_duration(fault.U_fault)
+    if final_circuit:
+        t_c_max_iec = get_max_allow_disconnect_time(U_phase, EarthingSystem.TN)
+        t_c_max = min(t_c_max.to('ms'), t_c_max_iec.to('ms'))
+    return IndirectContactProtectionResult(
+        I_f=fault.I_fault,
+        U_f=fault.U_fault,
+        L_max=L_max,
+        t_c_max=t_c_max,
+        R_pe_max=R_pe_max
+    )
 
-        Returns
-        -------
-        IndirectContactProtectionResult
-            I_f: Quantity | None
-                Fault current.
-            U_f: Quantity | None
-                Voltage (touch potential rise) between earth (0 V) and an
-                exposed conductive part of the low-voltage distribution network.
-            L_max: Quantity | None
-                Maximum allowable length of the cable between the distribution
-                board and the appliance/sub-distribution board, so that the
-                minimum short-circuit current calculated at the end of the cable
-                would equal the maximum limit of the magnetic trip current of
-                the circuit breaker.
-            t_c_max: Quantity | None
-                Maximum allowable contact duration with touch voltage according
-                to the applicable safety curve.
-            R_pe_max: Quantity | None
-                Maximum allowable resistance of the PE-conductor between the
-                main earthing terminal and the most distant exposed conductive
-                part in the distribution network, so that the fault current
-                would equal the maximum limit of the magnetic trip current of
-                the circuit breaker just upstream of the most distant exposed
-                conductive part.
-        """
-        fault = LineToExposedConductivePartFault(
-            U_phase=U_phase,
-            L=L_cable,
-            S_phase=S_phase,
-            S_pe=S_phase if S_pe is None else S_pe,
-            conductor_material=conductor_material
-        )
-        if I_m_cb is not None:
-            L_max = fault.L_max(I_m_cb)
-            R_pe_max = (fault.U_fault / I_m_cb).to('ohm')
-        else:
-            L_max = None
-            R_pe_max = None
-        safety_curve = SafetyCurve(
-            voltage_type="AC",
-            skin_condition=skin_condition
-        )
-        t_c_max = safety_curve.max_contact_duration(fault.U_fault)
-        if final_circuit:
-            t_c_max_iec = get_max_allow_disconnect_time(U_phase, EarthingSystem.TN)
-            t_c_max = min(t_c_max.to('ms'), t_c_max_iec.to('ms'))
-        return IndirectContactProtectionResult(
-            I_f=fault.I_fault,
-            U_f=fault.U_fault,
-            L_max=L_max,
-            t_c_max=t_c_max,
-            R_pe_max=R_pe_max
-        )
 
-    @staticmethod
-    def check_earthing_resistance(
-        U_phase: Quantity,
-        R_b: Quantity,
-        R_e: Quantity = Q_(5, 'ohm'),
-        skin_condition: str = "BB2",
-        final_circuit: bool = True
-    ) -> Quantity:
-        """
-        Determines the requirements regarding the earthing resistance of the
-        low-voltage distribution network by considering an insulation fault via
-        an extraneous conductive part.
+def check_earthing_resistance(
+    U_phase: Quantity,
+    R_b: Quantity,
+    R_e: Quantity = Q_(5, 'ohm'),
+    skin_condition: str = "BB2",
+    final_circuit: bool = True
+) -> Quantity:
+    """
+    Determines the requirements regarding the earthing resistance of the
+    low-voltage distribution network by considering an insulation fault via
+    an extraneous conductive part.
 
-        Parameters
-        ----------
-        U_phase: Quantity
-            Phase voltage (line-to-ground voltage) of the low-voltage
+    Parameters
+    ----------
+    U_phase: Quantity
+        Phase voltage (line-to-ground voltage) of the low-voltage
+        distribution network.
+    R_b: Quantity
+        Measured earth spreading resistance of the low-voltage distribution
+        network earthing system.
+    R_e: Quantity, optional
+        The earth contact resistance between ground and any extraneous
+        conductive part. By default, this is set to 5 ohm (according to AREI
+        art. 80.03).
+    skin_condition: str, {"BB1", "BB2" (default)}
+        Code that identifies the condition of the human skin: either dry
+        (BB1) or wet (BB2).
+    final_circuit: bool, default True
+        Indicates that the cable is feeding an electrical consumer (of which
+        the nominal current does not exceed 32 A).
+
+    Returns
+    -------
+    IndirectContactProtectionResult.
+        I_f: Quantity
+            Fault current.
+        U_f: Quantity | None
+            Voltage (touch potential rise) between earth (0 V) and an
+            exposed conductive part of the low-voltage distribution network.
+        t_c_max: Quantity | None
+            Maximum allowable contact duration with touch voltage according
+            to the applicable safety curve.
+        R_b_max: Quantity | None
+            Maximum allowable earth spreading resistance of the low-voltage
             distribution network.
-        R_b: Quantity
-            Measured earth spreading resistance of the low-voltage distribution
-            network earthing system.
-        skin_condition: str, {"BB1", "BB2" (default)}
-            Code that identifies the condition of the human skin: either dry
-            (BB1) or wet (BB2).
-        R_e: Quantity, optional
-            The earth contact resistance between ground and any extraneous
-            conductive part. By default, this is set to 5 ohm (according to AREI
-            art. 80.03).
-        final_circuit: bool, default True
-            Indicates that the cable is feeding an electrical consumer (of which
-            the nominal current does not exceed 32 A).
-
-        Returns
-        -------
-        IndirectContactProtectionResult.
-            I_f: Quantity
-                Fault current.
-            U_f: Quantity | None
-                Voltage (touch potential rise) between earth (0 V) and an
-                exposed conductive part of the low-voltage distribution network.
-            t_c_max: Quantity | None
-                Maximum allowable contact duration with touch voltage according
-                to the applicable safety curve.
-            R_b_max: Quantity | None
-                Maximum allowable earth spreading resistance of the low-voltage
-                distribution network.
-        """
-        fault = LineToExtraneousConductivePartFault(U_phase, R_b, R_e, skin_condition)
-        if final_circuit:
-            t_c_max_iec = get_max_allow_disconnect_time(U_phase, EarthingSystem.TN)
-            t_c_max = min(fault.t_c_max.to('ms'), t_c_max_iec.to('ms'))
-        else:
-            t_c_max = fault.t_c_max
-        return IndirectContactProtectionResult(
-            I_f=fault.I_fault,
-            U_f=fault.U_fault,
-            R_b_max=fault.R_b_max,
-            t_c_max=t_c_max
-        )
+    """
+    fault = LineToExtraneousConductivePartFault(U_phase, R_b, R_e, skin_condition)
+    if final_circuit:
+        t_c_max_iec = get_max_allow_disconnect_time(U_phase, EarthingSystem.TN)
+        t_c_max = min(fault.t_c_max.to('ms'), t_c_max_iec.to('ms'))
+    else:
+        t_c_max = fault.t_c_max
+    return IndirectContactProtectionResult(
+        I_f=fault.I_fault,
+        U_f=fault.U_fault,
+        R_b_max=fault.R_b_max,
+        t_c_max=t_c_max
+    )

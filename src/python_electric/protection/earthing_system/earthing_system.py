@@ -106,11 +106,3 @@ class IndirectContactProtectionResult:
     t_c_max: Quantity | None = None
     R_b_max: Quantity | None = None
     R_pe_max: Quantity | None = None
-
-
-class AbstractEarthingSystem(ABC):
-
-    @staticmethod
-    @abstractmethod
-    def check_indirect_contact(*args, **kwargs) -> IndirectContactProtectionResult:
-        ...
