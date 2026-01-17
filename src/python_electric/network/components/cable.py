@@ -76,11 +76,11 @@ class Cable(Component):
         Insulation material around the conductors of the cable.
     ambient: Ambient = Ambient.AIR
         Ambient where the cable is installed, either in air or buried in the
-        ground.
+        ground. See enum Ambient.
     T_amb: Quantity = Q_(30, 'degC')
         Ambient temperature of the cable.
     install_method: InstallMethod = InstallMethod.E
-        Installation method according to enum InstallationMethods.
+        Installation method according to enum InstallMethod.
     cable_mounting: CableMounting = CableMounting.PERFORATED_TRAY
         Specifies in more detail the way cables are mounted. See enum
         CableMounting.
