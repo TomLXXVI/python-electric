@@ -1,7 +1,11 @@
+from __future__ import annotations
+
 import pint
+from pint.facets.plain.quantity import PlainQuantity as Quantity
 
 UNITS = pint.UnitRegistry()
-Quantity = UNITS.Quantity
+
+Q_ = UNITS.Quantity
 
 unit_definitions = [
     'fraction = [] = frac',
@@ -12,3 +16,5 @@ for ud in unit_definitions:
     UNITS.define(ud)
 
 pint.set_application_registry(UNITS)
+
+__all__ = ["UNITS", "Q_", "Quantity"]

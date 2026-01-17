@@ -20,16 +20,16 @@ class VoltReference(float, Enum):
 
 
 class PhaseSystem(StrEnum):
-    THREE_PHASE = "three_phase"
-    SINGLE_PHASE = "single_phase"
+    PH3 = "three_phase"
+    PH1 = "single_phase"
 
     @property
-    def three_phase(self) -> bool:
-        return self == PhaseSystem.THREE_PHASE
+    def is_ph3(self) -> bool:
+        return self == PhaseSystem.PH3
 
     @property
-    def single_phase(self) -> bool:
-        return self == PhaseSystem.SINGLE_PHASE
+    def is_ph1(self) -> bool:
+        return self == PhaseSystem.PH1
 
     def cP(self, volt_ref: VoltReference | None = None) -> float:
         """
@@ -47,7 +47,7 @@ class PhaseSystem(StrEnum):
         -------
         float
         """
-        if self == PhaseSystem.THREE_PHASE:
+        if self == PhaseSystem.PH3:
             if volt_ref == VoltReference.PH3_LINE_TO_LINE or volt_ref is None:
                 return math.sqrt(3)
             elif volt_ref == VoltReference.PH3_GROUND_TO_LINE:
@@ -57,7 +57,7 @@ class PhaseSystem(StrEnum):
                     f"Voltage reference {volt_ref} is not "
                     f"valid in case of a three-phase cable."
                 )
-        elif self == PhaseSystem.SINGLE_PHASE:
+        elif self == PhaseSystem.PH1:
             return 1.0
         else:
             raise ValueError("Value of `phase system` is not recognized.")

@@ -1,11 +1,11 @@
 import math
 
-from ... import Quantity
+from ... import Quantity, Q_
 from ... import calc
-from ...materials import ConductorMaterials
+from ...materials import ConductorMaterial
 from ..safety_curve import SafetyCurve
 from .earthing_system import (
-    IndirectContactProtectionResult,
+    ICPResult,
     get_max_allow_disconnect_time,
     EarthingSystem
 )
@@ -19,7 +19,6 @@ __all__ = [
     "check_earthing_resistance"
 ]
 
-Q_ = Quantity
 PI = math.pi
 
 
@@ -36,7 +35,7 @@ class ITSingleFault:
         Z_n: Quantity,
         R_e: Quantity,
         L_tot: Quantity,
-        c_cable: Quantity = Q_(25, 'µF / km'),
+        c_cable: Quantity = Q_(0.25, 'µF / km'),
         neutral_distributed: bool = True,
         C_filter: Quantity = Q_(0.0, 'F'),
         R_f: Quantity = Q_(0.0, 'ohm'),
@@ -60,7 +59,7 @@ class ITSingleFault:
         L_tot:
             Approximate total cable length of the low-voltage network in the
             building.
-        c_cable: Quanity
+        c_cable: Quanity, default 0.25 µF
             Specific capacitance (i.e. per unit length of cable) of the
             conductors with respect to ground.
         neutral_distributed: bool, default True
@@ -74,10 +73,6 @@ class ITSingleFault:
             and an exposed conductive part connected to the PE-conductor. 
         f: Quantity, default 50 Hz
             Network voltage frequency.
-        
-        Returns
-        -------
-        None
         """
         self.U_phase = U_phase.to('V').m
         self.Z_n = Z_n.to('ohm').m
@@ -111,9 +106,8 @@ class ITSingleFault:
         -------
         Quantity
         """
-        a = complex(0, self.omega * self._C)
-        b = a * self.Z_n
-        I_f = -self._E * b / (self.Z_n + self.R_f * (1 + b))
+        a = complex(1, self.omega * self._C * self.Z_n)
+        I_f = a * -self._E / (self.Z_n + a * self.R_f)
         I_f_mag = abs(I_f)
         return Q_(I_f_mag, 'A')
 
@@ -150,7 +144,7 @@ class ITDoubleFault:
         L: Quantity,
         S_phase: Quantity,
         S_pe: Quantity,
-        conductor_material: ConductorMaterials,
+        conductor_material: ConductorMaterial,
         neutral_distributed: bool = True,
         R_e: Quantity | None = None
     ) -> None:
@@ -168,7 +162,7 @@ class ITDoubleFault:
             Cross-sectional area of the phase conductors.
         S_pe: Quantity
             Cross-sectional area of PE-conductor.
-        conductor_material: ConductorMaterials
+        conductor_material: ConductorMaterial
             Material the cable conductors are made of. See enum
             ConductorMaterials in /materials.
         neutral_distributed: bool, default True
@@ -318,14 +312,14 @@ def check_indirect_contact(
     U_phase: Quantity,
     L_cable: Quantity,
     S_phase: Quantity,
-    conductor_material: ConductorMaterials,
+    conductor_material: ConductorMaterial,
     I_m_cb: Quantity | None = None,
     S_pe: Quantity | None = None,
     skin_condition: str = "BB2",
     final_circuit: bool = True,
     neutral_distributed: bool = True,
     R_e: Quantity | None = None
-) -> IndirectContactProtectionResult:
+) -> ICPResult:
     """
     Determines the requirements so that the circuit breaker of a circuit would
     also protect against indirect contact in a low-voltage distribution network
@@ -343,7 +337,7 @@ def check_indirect_contact(
         under investigation.
     S_phase: Quantity
         Cross-sectional area of the loaded phase conductors.
-    conductor_material: ConductorMaterials
+    conductor_material: ConductorMaterial
         Material the cable conductors are made of. See enum
         ConductorMaterials in /materials.
     I_m_cb: Quantity, optional
@@ -373,7 +367,7 @@ def check_indirect_contact(
 
     Returns
     -------
-    IndirectContactProtectionResult
+    ICPResult
         I_f: Quantity | None
             Fault current.
         U_f: Quantity | None
@@ -419,7 +413,7 @@ def check_indirect_contact(
     if final_circuit:
         t_c_max_iec = get_max_allow_disconnect_time(U_phase, EarthingSystem.TN)
         t_c_max = min(t_c_max.to('ms'), t_c_max_iec.to('ms'))
-    return IndirectContactProtectionResult(
+    return ICPResult(
         I_f=fault.I_fault,
         U_f=fault.U_fault,
         L_max=L_max,
@@ -483,7 +477,7 @@ def check_earthing_resistance(
         t_c_max = min(fault.t_c_max.to('ms'), t_c_max_iec.to('ms'))
     else:
         t_c_max = fault.t_c_max
-    return IndirectContactProtectionResult(
+    return ICPResult(
         I_f=fault.I_fault,
         U_f=fault.U_fault,
         R_b_max=fault.R_b_max,

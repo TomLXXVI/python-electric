@@ -27,7 +27,7 @@ class PolarStringRepresentation:
                 f"{np.abs(qty.magnitude):.{decimals}f} {qty.units:~} "
                 f"< {np.angle(qty.magnitude, deg=True):.2f}°"
             )
-        if isinstance(qty.magnitude, npt.ArrayLike):
+        if isinstance(qty.magnitude, np.ndarray):
             vector_str = [
                 f"{np.abs(q.magnitude):.{decimals}f} {q.units:~} "
                 f"< {np.angle(q.magnitude, deg=True):.2f}°"

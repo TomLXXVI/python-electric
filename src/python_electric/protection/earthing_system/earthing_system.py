@@ -1,14 +1,13 @@
 from enum import StrEnum
 from dataclasses import dataclass
-from abc import ABC, abstractmethod
 
-from python_electric import Quantity
+from python_electric import Quantity, Q_
 
-Q_ = Quantity
 
 __all__ = [
     "EarthingSystem",
-    "IndirectContactProtectionResult"
+    "ICPResult",
+    "get_max_allow_disconnect_time"
 ]
 
 
@@ -69,7 +68,7 @@ def get_max_allow_disconnect_time(
 
 
 @dataclass
-class IndirectContactProtectionResult:
+class ICPResult:
     """
     Holds the results returned from methods of `AbstractEarthingSystem`-derived
     classes that check protection against electric shock due to indirect

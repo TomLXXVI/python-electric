@@ -1,4 +1,4 @@
 """
-Impedance calculation of electrical equipment.
+Electrical equipment: impedance
 """
 from .equipment import *

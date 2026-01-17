@@ -1,9 +1,7 @@
 import math
 
-from python_electric import Quantity
+from python_electric import Q_
 from python_electric import calc
-
-Q_ = Quantity
 
 U_eff_line = Q_(400, 'V').m
 P_l1 = Q_(400, 'W').m
@@ -13,9 +11,9 @@ P_l3 = Q_(1e-12, 'W').m
 
 U_eff_ph = U_eff_line / math.sqrt(3)
 
-I_eff_1 = calc.get_1ph_line_current(P_l1, U_eff_ph, 1.0)
-I_eff_2 = calc.get_1ph_line_current(P_l2, U_eff_ph, 1.0)
-I_eff_3 = calc.get_1ph_line_current(P_l3, U_eff_ph, 1.0)
+I_eff_1 = P_l1 / U_eff_ph
+I_eff_2 = P_l2 / U_eff_ph
+I_eff_3 = P_l3 / U_eff_ph
 
 I_1 = calc.phasor(I_eff_1, 0.0)
 I_2 = calc.phasor(I_eff_2, -120.0)
@@ -37,7 +35,7 @@ millman = calc.MillmanTheorem(
     neutral_impedance=float("inf")
 )
 
-print(f"deltaU_neutral = {calc.polar(millman.deltaU_neutral)}")
+print(f"deltaU_neutral = {calc.polar(millman.dU_neutral)}")
 
 I_line = millman.I_line
 print(f"I_1 = {calc.polar(I_line[0])}")

@@ -1,2 +1,4 @@
-from .cable import *
+"""
+Cable sizing routines.
+"""
 from .sizing import *

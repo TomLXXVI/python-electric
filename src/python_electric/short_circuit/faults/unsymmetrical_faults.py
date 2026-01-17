@@ -142,7 +142,9 @@ class UnSymmetricalFault(ABC):
         self._network_2 = network_012[2]
         self._U_phase: Union[float, complex] = c * U_prefault
         self._faulted_node_ID: Optional[str] = None
-        self._faulted_node_index: Optional[int] = None
+        self._faulted_node_index_0: Optional[int] = None
+        self._faulted_node_index_1: Optional[int] = None
+        self._faulted_node_index_2: Optional[int] = None
         self._Z_f: Union[float, complex] = 0.0
         self._I_f_012: Optional[np.ndarray] = None
 
@@ -163,7 +165,11 @@ class UnSymmetricalFault(ABC):
             the fault occurs and the reference node of the network.
         """
         self._faulted_node_ID = node_ID
-        self._faulted_node_index = self._network_1.get_node_index(node_ID)
+
+        self._faulted_node_index_0 = self._network_0.get_node_index(node_ID)
+        self._faulted_node_index_1 = self._network_1.get_node_index(node_ID)
+        self._faulted_node_index_2 = self._network_2.get_node_index(node_ID)
+
         self._Z_f = Z_fault
 
     @abstractmethod
@@ -187,12 +193,14 @@ class UnSymmetricalFault(ABC):
         """
         Returns the sequence voltage components of the given network node.
         """
-        k = self._faulted_node_index
+        k0 = self._faulted_node_index_0
+        k1 = self._faulted_node_index_1
+        k2 = self._faulted_node_index_2
         node = self._network_1.get_node(ID)
         i = node.index
-        Z_ik_0 = self._network_0.get_matrix_element(i, k)
-        Z_ik_1 = self._network_1.get_matrix_element(i, k)
-        Z_ik_2 = self._network_2.get_matrix_element(i, k)
+        Z_ik_0 = self._network_0.get_matrix_element(i, k0)
+        Z_ik_1 = self._network_1.get_matrix_element(i, k1)
+        Z_ik_2 = self._network_2.get_matrix_element(i, k2)
         Z_ik_012 = np.diagflat([Z_ik_0, Z_ik_1, Z_ik_2])
         if self._I_f_012 is None:
             self.get_fault_current_012()
@@ -275,10 +283,12 @@ class UnSymmetricalFault(ABC):
 class LineToGroundFault(UnSymmetricalFault):
 
     def get_fault_current_012(self) -> np.ndarray:
-        k = self._faulted_node_index
-        Z_kk_0 = self._network_0.get_matrix_element(k, k)
-        Z_kk_1 = self._network_1.get_matrix_element(k, k)
-        Z_kk_2 = self._network_2.get_matrix_element(k, k)
+        k0 = self._faulted_node_index_0
+        k1 = self._faulted_node_index_1
+        k2 = self._faulted_node_index_2
+        Z_kk_0 = self._network_0.get_matrix_element(k0, k0)
+        Z_kk_1 = self._network_1.get_matrix_element(k1, k1)
+        Z_kk_2 = self._network_2.get_matrix_element(k2, k2)
         I_f_0 = I_f_1 = I_f_2 = self._U_phase / (3.0 * self._Z_f + Z_kk_0 + Z_kk_1 + Z_kk_2)
         self._I_f_012 = np.array([[I_f_0, I_f_1, I_f_2]]).transpose()
         return self._I_f_012
@@ -287,9 +297,10 @@ class LineToGroundFault(UnSymmetricalFault):
 class LineToLineFault(UnSymmetricalFault):
 
     def get_fault_current_012(self) -> np.ndarray:
-        k = self._faulted_node_index
-        Z_kk_1 = self._network_1.get_matrix_element(k, k)
-        Z_kk_2 = self._network_2.get_matrix_element(k, k)
+        k1 = self._faulted_node_index_1
+        k2 = self._faulted_node_index_2
+        Z_kk_1 = self._network_1.get_matrix_element(k1, k1)
+        Z_kk_2 = self._network_2.get_matrix_element(k2, k2)
         I_f_0 = 0.0
         I_f_1 = self._U_phase / (Z_kk_1 + Z_kk_2 + self._Z_f)
         I_f_2 = -I_f_1
@@ -300,10 +311,12 @@ class LineToLineFault(UnSymmetricalFault):
 class DoubleLineToGroundFault(UnSymmetricalFault):
 
     def get_fault_current_012(self) -> np.ndarray:
-        k = self._faulted_node_index
-        Z_kk_0 = self._network_0.get_matrix_element(k, k)
-        Z_kk_1 = self._network_1.get_matrix_element(k, k)
-        Z_kk_2 = self._network_2.get_matrix_element(k, k)
+        k0 = self._faulted_node_index_0
+        k1 = self._faulted_node_index_1
+        k2 = self._faulted_node_index_2
+        Z_kk_0 = self._network_0.get_matrix_element(k0, k0)
+        Z_kk_1 = self._network_1.get_matrix_element(k1, k1)
+        Z_kk_2 = self._network_2.get_matrix_element(k2, k2)
 
         Z_series = Z_kk_0 + 3 * self._Z_f
         Z_parallel = Z_kk_2 * Z_series / (Z_kk_2 + Z_series)

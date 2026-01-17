@@ -118,7 +118,7 @@ def styled_message(
     display(HTML(html))
 
 
-def show_docs(obj: object, stylish: bool = False) -> None:
+def show_docs(obj: object, styled: bool = False) -> None:
     """
     Prints the docstring of `obj` to screen.
 
@@ -126,6 +126,7 @@ def show_docs(obj: object, stylish: bool = False) -> None:
     the docstring in a collapsible info box.
     """
     info = _get_info(obj)
-    if not stylish:
+    if not styled:
         print(info)
-    styled_message(info, collapsible=True)
+    else:
+        styled_message(info, title=f"Info about {obj.__name__}", collapsible=True)

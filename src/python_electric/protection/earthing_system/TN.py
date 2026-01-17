@@ -1,13 +1,13 @@
-from python_electric import Quantity
+from python_electric import Quantity, Q_
 from python_electric.materials import (
-    ConductorMaterials,
-    CONDUCTOR_MATERIALS
+    ConductorMaterial,
+    CONDUCTOR_PROPS
 )
 from python_electric.protection import SafetyCurve
 from .earthing_system import (
     EarthingSystem,
     get_max_allow_disconnect_time,
-    IndirectContactProtectionResult
+    ICPResult
 )
 
 __all__ = [
@@ -16,8 +16,6 @@ __all__ = [
     "check_indirect_contact",
     "check_earthing_resistance"
 ]
-
-Q_ = Quantity
 
 
 class LineToExposedConductivePartFault:
@@ -33,7 +31,7 @@ class LineToExposedConductivePartFault:
         L: Quantity,
         S_phase: Quantity,
         S_pe: Quantity,
-        conductor_material: ConductorMaterials
+        conductor_material: ConductorMaterial
     ) -> None:
         """
         Creates a `LineToGroundFault` calculation object.
@@ -49,7 +47,7 @@ class LineToExposedConductivePartFault:
             Cross-sectional area of the phase conductors.
         S_pe: Quantity
             Cross-sectional area of PE-conductor.
-        conductor_material: ConductorMaterials
+        conductor_material: ConductorMaterial
             Material the cable conductors are made of. See enum
             ConductorMaterials in /materials.
         """
@@ -62,7 +60,7 @@ class LineToExposedConductivePartFault:
         self.L = L
         self.S_phase = S_phase
         self.S_pe = S_pe
-        conductor_material = CONDUCTOR_MATERIALS[conductor_material]
+        conductor_material = CONDUCTOR_PROPS[conductor_material]
         self.rho = 1.25 * conductor_material.resistivity20
         self.R_phase = self._get_R(L, S_phase, self.rho)
         self.R_pe = self._get_R(L, S_pe, self.rho)
@@ -231,12 +229,12 @@ def check_indirect_contact(
     U_phase: Quantity,
     L_cable: Quantity,
     S_phase: Quantity,
-    conductor_material: ConductorMaterials,
+    conductor_material: ConductorMaterial,
     I_m_cb: Quantity | None = None,
     S_pe: Quantity | None = None,
     skin_condition: str = "BB2",
     final_circuit: bool = True
-) -> IndirectContactProtectionResult:
+) -> ICPResult:
     """
     Determines the requirements so that a circuit breaker would also protect
     against indirect contact in a low-voltage distribution network with
@@ -252,7 +250,7 @@ def check_indirect_contact(
         electrical appliance with the exposed conductive part.
     S_phase: Quantity
         Cross-sectional area of the loaded phase conductors.
-    conductor_material: ConductorMaterials
+    conductor_material: ConductorMaterial
         Material the cable conductors are made of. See enum
         ConductorMaterials in /materials.
     I_m_cb: Quantity, optional
@@ -273,7 +271,7 @@ def check_indirect_contact(
 
     Returns
     -------
-    IndirectContactProtectionResult
+    ICPResult
         I_f: Quantity | None
             Fault current.
         U_f: Quantity | None
@@ -317,7 +315,7 @@ def check_indirect_contact(
     if final_circuit:
         t_c_max_iec = get_max_allow_disconnect_time(U_phase, EarthingSystem.TN)
         t_c_max = min(t_c_max.to('ms'), t_c_max_iec.to('ms'))
-    return IndirectContactProtectionResult(
+    return ICPResult(
         I_f=fault.I_fault,
         U_f=fault.U_fault,
         L_max=L_max,
@@ -332,7 +330,7 @@ def check_earthing_resistance(
     R_e: Quantity = Q_(5, 'ohm'),
     skin_condition: str = "BB2",
     final_circuit: bool = True
-) -> Quantity:
+) -> ICPResult:
     """
     Determines the requirements regarding the earthing resistance of the
     low-voltage distribution network by considering an insulation fault via
@@ -378,7 +376,7 @@ def check_earthing_resistance(
         t_c_max = min(fault.t_c_max.to('ms'), t_c_max_iec.to('ms'))
     else:
         t_c_max = fault.t_c_max
-    return IndirectContactProtectionResult(
+    return ICPResult(
         I_f=fault.I_fault,
         U_f=fault.U_fault,
         R_b_max=fault.R_b_max,

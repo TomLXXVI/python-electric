@@ -4,8 +4,8 @@ import cmath
 
 from .. import Quantity
 from ..materials import (
-    ConductorMaterials,
-    CONDUCTOR_MATERIALS
+    ConductorMaterial,
+    CONDUCTOR_PROPS
 )
 from ..sizing.cable.sizing import (
     CABLE_UNIT_REACTANCES,
@@ -76,7 +76,6 @@ class PowerGrid(Equipment):
         from its positive-sequence impedance.
 
         The model scales the positive-sequence resistance and reactance:
-
             R0 ≈ z0_r_factor * R1
             X0 ≈ z0_x_factor * X1
 
@@ -90,11 +89,11 @@ class PowerGrid(Equipment):
         times larger than the positive-sequence reactance.
 
         Limitations:
-            - Intended as a design-level approximation only.
-            - Actual Z0/Z1 ratio depends on earthing system, network
-              topology, and soil resistivity.
-            - For accurate short-circuit studies, Z0 should be obtained
-              from the grid operator or from a detailed network model.
+        -   Intended as a design-level approximation only.
+        -   Actual Z0/Z1 ratio depends on earthing system, network
+            topology, and soil resistivity.
+        -   For accurate short-circuit studies, Z0 should be obtained
+            from the grid operator or from a detailed network model.
         """
         z1 = self.Z1.to('ohm').magnitude
         r1, x1 = z1.real, z1.imag
@@ -167,17 +166,17 @@ class Transformer(Equipment):
         leakage path is of the same order as the positive-sequence one.
 
         Important limitations:
-            - This model does NOT implement vector-group logic. A delta
-              winding blocks zero-sequence currents on that side, which
-              corresponds to Z0 → very large (not represented here).
-            - Neutral earthing impedance (neutral resistor/reactor) is
-              not included explicitly. In reality:
-                  Z0 = Z0,transformer + 3 * Zn
-            - Use this as a rough approximation when no manufacturer
-              data for Z0 are available and the neutral is effectively
-              grounded on the considered side.
-            - For detailed studies, a dedicated transformer model with
-              vector group and neutral earthing should be used.
+        -   This model does NOT implement vector-group logic. A delta
+            winding blocks zero-sequence currents on that side, which
+            corresponds to Z0 → very large (not represented here).
+        -   Neutral earthing impedance (neutral resistor/reactor) is
+            not included explicitly. In reality:
+              Z0 = Z0,transformer + 3 * Zn
+        -   Use this as a rough approximation when no manufacturer
+            data for Z0 are available and the neutral is effectively
+            grounded on the considered side.
+        -   For detailed studies, a dedicated transformer model with
+            vector group and neutral earthing should be used.
         """
         z1 = self.Z1.to('ohm').magnitude
         return Quantity(self.z0_factor * z1, 'ohm')
@@ -245,13 +244,13 @@ class Generator(Equipment):
         order of magnitude as the positive-sequence impedance.
 
         Limitations:
-            - Valid only if the generator neutral is brought out and
-              effectively grounded (solidly or via a neutral impedance).
-            - If the neutral is isolated or not accessible, zero-sequence
-              currents cannot flow and the effective Z0 is very large.
-            - Actual Z0 depends on detailed machine design and neutral
-              earthing impedance; manufacturer data are preferable when
-              available.
+        -   Valid only if the generator neutral is brought out and
+            effectively grounded (solidly or via a neutral impedance).
+        -   If the neutral is isolated or not accessible, zero-sequence
+            currents cannot flow and the effective Z0 is very large.
+        -   Actual Z0 depends on detailed machine design and neutral
+            earthing impedance; manufacturer data are preferable when
+            available.
         """
         z1 = self.Z1.to('ohm').magnitude
         return Quantity(self.z0_factor * z1, 'ohm')
@@ -266,11 +265,11 @@ class SynchronousMotor(Generator):
         Z0 ≈ z0_factor * Z1
 
     Limitations are similar:
-        - In many LV applications the stator neutral of synchronous motors
-          is not brought out; in such cases the contribution to zero-sequence
-          fault currents is negligible (Z0 effectively very large).
-        - If a grounded neutral does exist, z0_factor can be adjusted to
-          match manufacturer data or study assumptions.
+    -   In many LV applications the stator neutral of synchronous motors
+        is not brought out; in such cases the contribution to zero-sequence
+        fault currents is negligible (Z0 effectively very large).
+    -   If a grounded neutral does exist, z0_factor can be adjusted to
+        match manufacturer data or study assumptions.
     """
     pass
 
@@ -281,7 +280,7 @@ class Cable(Equipment):
         self,
         length: Quantity,
         cross_section_area: Quantity,
-        conductor_material: ConductorMaterials,
+        conductor_material: ConductorMaterial,
         cable_arrangement: CableArrangement,
         temperature: Quantity,
         z0_r_factor: float = 3.0,
@@ -291,7 +290,7 @@ class Cable(Equipment):
         super().__init__(name)
         self.L = length
         self.A = cross_section_area
-        conductor_material = CONDUCTOR_MATERIALS[conductor_material]
+        conductor_material = CONDUCTOR_PROPS[conductor_material]
         self.r = conductor_material.resistivity(temperature.to('degC').m)
         self.x = CABLE_UNIT_REACTANCES[cable_arrangement]
         # Zero-sequence scaling factors
@@ -335,13 +334,13 @@ class Cable(Equipment):
         currents includes soil and metallic sheaths or PEN conductors.
 
         Limitations:
-            - Intended for typical LV distribution cables in ground.
-            - Not valid for overhead lines, special sheath bonding
-              arrangements, or unusual installation methods.
-            - Actual Z0 depends strongly on soil resistivity, cable
-              geometry, and sheath/PEN configuration.
-            - When available, manufacturer or utility data for Z0 should
-              be used instead of this approximation.
+        -   Intended for typical LV distribution cables in ground.
+        -   Not valid for overhead lines, special sheath bonding
+            arrangements, or unusual installation methods.
+        -   Actual Z0 depends strongly on soil resistivity, cable
+            geometry, and sheath/PEN configuration.
+        -   When available, manufacturer or utility data for Z0 should
+            be used instead of this approximation.
         """
         z1 = self.Z1.to('ohm').magnitude
         r1, x1 = z1.real, z1.imag
@@ -356,7 +355,7 @@ class BusBar(Cable):
         self,
         length: Quantity,
         cross_section_area: Quantity,
-        conductor_material: ConductorMaterials,
+        conductor_material: ConductorMaterial,
         temperature: Quantity,
         z0_r_factor: float = 1.0,
         z0_x_factor: float = 1.0
@@ -439,12 +438,12 @@ class InductionMotor(Equipment):
         positive-sequence impedance.
 
         Limitations:
-            - This is an approximation based on a lumped-impedance model.
-            - It does not replace a full sequence model with explicit rotor
-              and stator parameters.
-            - If detailed manufacturer data (or a full equivalent circuit)
-              are available, Z2 should preferably be computed from that
-              data instead of using this scaling approach.
+        -   This is an approximation based on a lumped-impedance model.
+        -   It does not replace a full sequence model with explicit rotor
+            and stator parameters.
+        -   If detailed manufacturer data (or a full equivalent circuit)
+            are available, Z2 should preferably be computed from that
+            data instead of using this scaling approach.
         """
         z1 = self.Z1.to('ohm').magnitude
         return Quantity(self.z2_factor * z1, 'ohm')
@@ -471,11 +470,11 @@ class InductionMotor(Equipment):
         numerically small but still representable with a finite complex value.
 
         Limitations:
-            - This is a modelling convenience rather than a physical formula.
-            - If the motor is actually connected in a way that allows
-              zero-sequence currents (e.g. special winding or grounded
-              neutral), a dedicated sequence model should be used and
-              z0_factor adjusted or replaced accordingly.
+        -   This is a modeling convenience rather than a physical formula.
+        -   If the motor is actually connected in a way that allows
+            zero-sequence currents (e.g. special winding or grounded
+            neutral), a dedicated sequence model should be used and
+            z0_factor adjusted or replaced accordingly.
         """
         z1 = self.Z1.to('ohm').magnitude
         return Quantity(self.z0_factor * z1, 'ohm')

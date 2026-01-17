@@ -1,14 +1,11 @@
 from scipy.interpolate import interp1d
 
-from .. import Quantity
+from .. import Quantity, Q_
 from ..utils.charts import LineChart
 
 __all__ = [
     "SafetyCurve",
 ]
-
-
-Q_ = Quantity
 
 
 class SafetyCurve:

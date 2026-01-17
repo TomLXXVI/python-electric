@@ -5,7 +5,7 @@ References
 ----------
 Electrical Installation Guide 2007, Merlin Gerin, Chapter G, Fig. G21a.
 """
-from ....materials import ConductorMaterial, Insulation
+from ....materials import ConductorProperties, InsulationProperties
 from ....utils.lookup_table import LookupTable
 
 
@@ -106,18 +106,18 @@ copper_table = _create_copper_table()
 alu_table = _create_aluminium_table()
 
 def get_cross_sectional_area(
-    conductor_material: ConductorMaterial,
-    insulation: Insulation,
+    conductor_props: ConductorProperties,
+    insulation_props: InsulationProperties,
     num_loaded_conductors: int,
     ref_method: str,
     current: float
 ) -> float:
-    if conductor_material.type == "copper" or conductor_material.type == "aluminium":
-        if insulation.type in ["PVC", "XLPE"]:
+    if conductor_props.type == "copper" or conductor_props.type == "aluminium":
+        if insulation_props.type in ["PVC", "XLPE"]:
             if 1 < num_loaded_conductors <= 3:
-                key = insulation.type + str(num_loaded_conductors)
+                key = insulation_props.type + str(num_loaded_conductors)
                 col_index = index_table[ref_method][key]
-                if conductor_material.type == "copper":
+                if conductor_props.type == "copper":
                     csa = copper_table.rowheader_value(col_index, current)
                 else:
                     csa = alu_table.rowheader_value(col_index, current)
@@ -127,24 +127,24 @@ def get_cross_sectional_area(
                     "The number of loaded conductors is limited to 2 or 3."
                 )
         else:
-            raise ValueError(f"{insulation.type} is not supported.")
+            raise ValueError(f"{insulation_props.type} is not supported.")
     else:
         raise ValueError("Only copper and aluminium conductors are supported.")
 
 
 def get_ampacity(
-    conductor_material: ConductorMaterial,
-    insulation: Insulation,
+    conductor_props: ConductorProperties,
+    insulation_props: InsulationProperties,
     num_loaded_conductors: int,
     ref_method: str,
     cross_sectional_area: float
 ) -> float:
-    if conductor_material.type == "copper" or conductor_material.type == "aluminium":
-        if insulation.type in ["PVC", "XLPE"]:
+    if conductor_props.type == "copper" or conductor_props.type == "aluminium":
+        if insulation_props.type in ["PVC", "XLPE"]:
             if 1 < num_loaded_conductors <= 3:
-                key = insulation.type + str(num_loaded_conductors)
+                key = insulation_props.type + str(num_loaded_conductors)
                 col_index = index_table[ref_method][key]
-                if conductor_material.type == "copper":
+                if conductor_props.type == "copper":
                     amp = copper_table.data_value(cross_sectional_area, col_index)
                 else:
                     amp = alu_table.data_value(cross_sectional_area, col_index)
@@ -154,6 +154,6 @@ def get_ampacity(
                     "The number of loaded conductors is limited to 2 or 3."
                 )
         else:
-            raise ValueError(f"{insulation.type} is not supported.")
+            raise ValueError(f"{insulation_props.type} is not supported.")
     else:
         raise ValueError("Only copper and aluminium conductors are supported.")

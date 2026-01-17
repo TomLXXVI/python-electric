@@ -1,9 +1,5 @@
 """
-Cable sizing and impedance calculation.
-
-Integrates the sizing routine and impedance calculation of a cable inside a
-single class `AbstractCable` from which concrete classes `ThreePhaseCable` and
-`SinglePhaseCable` are derived.
+Cable: sizing - impedance - voltage drop - indirect contact protection
 
 References
 ----------
@@ -12,79 +8,58 @@ Descheemaeker, J., Hespel, L., Vansteenberge, C., & Verhelst, B. (2015).
 Laagspanningsinstallaties: technologie en ontwerp.
 """
 import math
-from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import ClassVar
-from abc import ABC
+from copy import deepcopy
 
 import numpy as np
 
-from ... import Quantity
-from ...utils.charts import LineChart
-from ...general import (
-    PhaseSystem,
-    VoltReference
-)
-from ...materials import (
-    ConductorMaterials,
-    InsulationMaterials
-)
+from ... import Quantity, Q_, VoltReference, PhaseSystem
+from ...materials import ConductorMaterial, InsulationMaterial, INSULATION_PROPS
+from ...sizing.cable import *
+from ...protection.earthing_system import EarthingSystem, ICPResult
+from ...protection import CircuitBreaker, earthing_system, check_current_based_selectivity
 from ...calc import voltage_drop
-from ...protection import (
-    CircuitBreaker,
-    check_current_based_selectivity,
-)
-from ...protection import earthing_system
-from ...protection.earthing_system import (
-    EarthingSystem,
-    IndirectContactProtectionResult,
-)
-from . import sizing
-from .sizing import (
-    Ambient,
-    InstallationMethods,
-    CableMounting,
-    CableArrangement,
-    CableSizingData
-)
+from ...utils.charts import LineChart
+
+from ..network import Component
 
 __all__ = [
-    "ThreePhaseCable",
-    "SinglePhaseCable",
-    "AbstractCable",
+    "Cable",
+    "ConductorMaterial",
+    "InsulationMaterial",
+    "Ambient",
+    "InstallMethod",
+    "CableMounting",
+    "CableArrangement",
     "plot_cable_characteristic",
     "check_selectivity"
 ]
 
-Q_ = Quantity
-
 
 @dataclass
-class AbstractCable(ABC):
+class Cable(Component):
     """
-    Class for sizing electrical cables in low-voltage three-phase systems.
+    Represents an electrical cable in a low-voltage network.
 
-    The cable object is sized immediately on instantiation of the class.
-    If a cross-sectional area is already specified by the user, it will be
-    checked if the conductors can carry the specified load current. If not the
-    case, a `ValueError` exception will be raised.
+    The cable is sized on instantiation, unless the conductor cross-sectional
+    area S is already specified by the user. In that case, it is checked if the
+    cable conductors are able to carry the specified load current. Should this
+    be not the case, a `ValueError` exception is raised.
 
     Parameters
     ----------
-    P_elec: Quantity | None = None
-        Rated active electric power that flows through the cable.
-    P_mech: Quantity | None = None
-        Rated mechanical power of the machine fed through the cable.
-    eta: float = 1.0
-        Rated electromechanical conversion efficiency of the connected machine.
-    I_load: Quantity | None = None
+    name: str
+        Uniquely identifies the cable in the network.
+    I_b: Quantity
         Rated load current through the cable.
+    U_l: Quantity = Q_(400, 'V')
+        Line-to-line voltage in case of a three-phase system or neutral-to-line
+        voltage in case of a single-phase system.
     cos_phi: float = 0.8
         Rated power factor, i.e. cosine of the phase shift between voltage and
         rated load current.
-    U_line: Quantity = Q_(400, 'V')
-        Line-to-line voltage in case of a three-phase system or neutral-to-line
-        voltage in case of a single-phase system.
+    L: Quantity = Q_(1, 'm')
+        Cable length.
     k_simul: float = 1.0
         Simultaneity factor to be applied for (industrial) distribution boards.
             Number of circuits  k_simul
@@ -94,19 +69,17 @@ class AbstractCable(ABC):
             >= 10               0.6
     k_ext: float = 1.0
         Expansion factor that takes into account possible future expansions.
-        For new, industrial installations, a guideline value is 1.2. 
-    L: Quantity = Q_(10, 'm')
-        Cable length.
-    conductor_material: ConductorMaterials = ConductorMaterials.COPPER
+        For new, industrial installations, a guideline value is 1.2.
+    conductor_material: ConductorMaterial = ConductorMaterial.COPPER
         Material the cable conductors are made of.
-    insulation_material: InsulationMaterials = InsulationMaterials.XLPE
+    insulation_material: InsulationMaterial = InsulationMaterial.XLPE
         Insulation material around the conductors of the cable.
     ambient: Ambient = Ambient.AIR
         Ambient where the cable is installed, either in air or buried in the
         ground.
-    T_amb: Quantity = Q_(35, 'degC')
+    T_amb: Quantity = Q_(30, 'degC')
         Ambient temperature of the cable.
-    install_method: InstallationMethod = InstallationMethod.E
+    install_method: InstallMethod = InstallMethod.E
         Installation method according to enum InstallationMethods.
     cable_mounting: CableMounting = CableMounting.PERFORATED_TRAY
         Specifies in more detail the way cables are mounted. See enum
@@ -117,7 +90,7 @@ class AbstractCable(ABC):
     num_circuits: int = 1
         The number of circuits or multicore cables in the proximity of the
         cable.
-    harmonic3_content: float = 0.0
+    h3_fraction: float = 0.0
         Fraction of third-order harmonics present in the total load current;
         a number between 0.0 and 1.0.
     sizing_based_on_I_nom: bool = False
@@ -125,8 +98,6 @@ class AbstractCable(ABC):
         conductors should be based on the standardized nominal current which is
         just greater than the rated load current. If False, conductors are sized
         based on rated load current.
-    name: str, optional
-        To uniquely identify the cable object.
     S: Quantity, optional
         Cross-sectional area of the loaded cable conductors. By default, this
         cross-sectional area is set to None, meaning that a valid
@@ -139,37 +110,42 @@ class AbstractCable(ABC):
     earthing_system: EarthingScheme, default EarthingScheme.TN
         Indicates the earthing system of the low-voltage system. By default,
         this is set to the TN-earthing system.
+    phase_system: PhaseSystem, default PhaseSystem.3PH
+        Indicates whether the cable is three-phase or single phase
+        (PhaseSystem.1PH).
 
     Attributes
     ----------
     I_z: Quantity
         Current-carrying capacity (ampacity) of the conductors at actual
         installation conditions.
-    I_nom: Quantity
+    I_z0: Quantity
+        Current-carrying capacity (ampacity) of the conductors at standard
+        installation conditions.
+    I_n: Quantity
         Standardized nominal current which is just greater than the rated load
         current of the cable. This current can be used to select the
         current-protective device for the cable.
-    I_load_corr: Quantity
+    I_bc: Quantity
         Load current corrected by multiplication with the simultaneity factor
         and expansion factor. This current is used to size the cable.
-    Z: dict[str, dict[int, Quantity]]
-        Dictionary that contains the zero-sequence (key 0), positive sequence
-        (key 1), and negative sequence (key 2) impedances of the cable
+    Z_dict: dict[str, dict[int, Quantity]]
+        Dictionary containing the zero-sequence (key 0), positive-sequence
+        (key 1), and negative-sequence (key 2) impedances of the cable
         conductors at three different temperatures:
-        -   at 20°C (key "T_20") used for calculating maximum short-circuit
+        -   at 20°C (key "T20") used for calculating maximum short-circuit
             currents.
         -   at the maximum continuous temperature of the insulation
-            (key "T_nom").
-        -   at 150°C (key "T_150") used for calculating minimum short-circuit
+            (key "T_n").
+        -   at 150°C (key "T150") used for calculating minimum short-circuit
             currents.
-        E.g. to get Z1 at 150 °C, use Z["T_150"][1].
-    U_drop: Quantity
-        Absolute drop in voltage across the cable in volts. Available after
-        method `voltage_drop()` has been called.
-    U_drop_pct: Quantity
-        Relative drop in voltage in percent. Available after method
-        `voltage_drop()` has been called.
-    joule_integral: Quantity
+        E.g. to get Z1 at 150 °C, use Z["T150"][1].
+    dU: Quantity
+        Absolute voltage drop across the cable. In case of a three-phase cable,
+        this voltage drop is specified with respect to ground/neutral.
+    dU_rel: Quantity
+        Relative voltage drop.
+    I2t: Quantity
         Joule integral of the cable.
     circuit_breaker: CircuitBreaker
         Circuit breaker connected to the cable. Available after method
@@ -180,285 +156,268 @@ class AbstractCable(ABC):
     I_sc_min: Quantity
         Calculated minimum short-circuit current at the end of the cable
         (usually caused by a single line-to-ground fault).
+    U_ph: Quantity
+        In case of a three-phase system, the ground-to-line voltage. Otherwise,
+        equal to attribute `U_l`.
 
     Methods
     -------
-    voltage_drop:
-        Calculates the voltage drop across the cable.
+    get_cable_impedance:
+        Calculates the impedance of the cable at a given temperature and returns
+        a dict with three values: 1: the positive sequence, 2: the negative
+        sequence, and 0: the zero-sequence impedance.
+    get_voltage_drop:
+        Calculates the voltage drop across the cable. Returns a tuple with the
+        absolute and relative voltage drop.
     connect_circuit_breaker:
         Connects a circuit breaker to the cable.
-    check_TN_indirect_contact_protection:
-        Can be used for low-voltage systems having a TN-earthing scheme.
+    check_indirect_contact_protection:
+        Can be used for low-voltage systems having a TN- or IT-earthing scheme.
         Returns the maximum allowable interruption time in order to protect
         against indirect contact in case of an insulation fault. If a circuit
         breaker is connected to the cable, also returns the maximum length of
         the cable that can be protected by this circuit breaker.
     """
-    phase_system: ClassVar[PhaseSystem]
-    P_elec: Quantity | None = None
-    P_mech: Quantity | None = None
-    eta: float = 1.0
-    I_load: Quantity | None = None
+    name: str
+    I_b: Quantity
+    U_l: Quantity = Q_(400, 'V')
     cos_phi: float = 0.8
-    U_line: Quantity = Q_(400, 'V')
+    L: Quantity = Q_(1.0, 'm')
     k_simul: float = 1.0
     k_ext: float = 1.0
-    L: Quantity = Q_(10, 'm')
-    conductor_material: ConductorMaterials = ConductorMaterials.COPPER
-    insulation_material: InsulationMaterials = InsulationMaterials.XLPE
+    conductor_material: ConductorMaterial = ConductorMaterial.COPPER
+    insulation_material: InsulationMaterial = InsulationMaterial.XLPE
     ambient: Ambient = Ambient.AIR
     T_amb: Quantity = Q_(30, 'degC')
-    install_method: InstallationMethods = InstallationMethods.E
+    install_method: InstallMethod = InstallMethod.E
     cable_mounting: CableMounting = CableMounting.PERFORATED_TRAY
     cable_arrangement: CableArrangement = CableArrangement.MULTICORE
     num_circuits: int = 1
-    harmonic3_content: float = 0.0
+    h3_fraction: float = 0.0
     sizing_based_on_I_nom: bool = False
-    name: str = "cable"
+    earthing_system: EarthingSystem = EarthingSystem.TN
+    phase_system: PhaseSystem = PhaseSystem.PH3
+
     S: Quantity | None = None
     S_pe: Quantity | None = None
-    earthing_system: EarthingSystem = EarthingSystem.TN
 
-    U_drop: Quantity = field(init=False)
-    U_drop_pct: Quantity = field(init=False)
+    # Calculated attributes:
+    dU: Quantity = field(init=False)
+    dU_rel: Quantity = field(init=False)
+
     circuit_breaker: CircuitBreaker = field(init=False, default=None)
+
+    I_bc: Quantity = field(init=False, default=None)
+    I_z: Quantity = field(init=False, default=None)
+    I_z0: Quantity = field(init=False, default=None)
+    I_n: Quantity = field(init=False, default=None)
+    I2t: Quantity = field(init=False, default=None)
     I_sc_max: Quantity = field(init=False, default=None)
     I_sc_min: Quantity = field(init=False, default=None)
-    U_phase: Quantity = field(init=False, default=None)
+
+    U_ph: Quantity = field(init=False, default=None)
+
+    Z_dict: dict[str, dict[int, Quantity[float | complex]]] = field(init=False, default_factory=dict)
 
     def __post_init__(self):
-        # Determine load current.
-        self._calc_load_current()
+        super().__init__(self.name)
+        self.I_bc = self._get_corr_load_current()
+        self.U_ph = self._get_phase_voltage()
+        self._size_cable()
+        self.Z_dict = self._calc_impedance_dict()
+        self.dU, self.dU_rel = self.get_voltage_drop(self.U_l, self.I_b, self.cos_phi)
 
-        # Size cable.
-        if self.S is None:
-            self._calculate_cable_sizing()
+    def _get_corr_load_current(self) -> Quantity:
+        return self.I_b * self.k_simul * self.k_ext
+
+    def _get_phase_voltage(self) -> Quantity:
+        if self.phase_system.is_ph3:
+            return self.U_l / math.sqrt(3)
         else:
+            return self.U_l
+
+    def _size_cable(self):
+        cd = self.__collect_data()
+        if self.S is None:
+            # If conductor csa is not specified, calculate minimal required csa
+            self.__size_cable(cd)
+        else:
+            # User specified the csa of cable conductors: check if ok.
             S_user = deepcopy(self.S)
-            self._calculate_cable_sizing()
+            self.__size_cable(cd)
             if self.S.to('mm ** 2') > S_user.to('mm ** 2'):
                 raise ValueError(
-                    f"The given csa {S_user.to('mm ** 2'):~P.2f} is too small. "
-                    f"A csa of at least {self.S.to('mm ** 2'):~P.2f} is "
-                    f"required."
+                    f"The specified csa {S_user.to('mm ** 2'):~P.2f} is too "
+                    f"small. A csa of at least {self.S.to('mm ** 2'):~P.2f} "
+                    f"is required."
                 ) from None
             else:
-                self._recalculate_cable_sizing(S_user)
+                self.__update_cable_params(cd, S_user)
 
-        # Set cross-sectional area of PE-conductor.
-        if self.S_pe is None:
-            self.S_pe = self.S
-
-        # Determine phase voltage.
-        if self.phase_system.three_phase:
-            self.U_phase = self.U_line / math.sqrt(3)
+    def __collect_data(self) -> CableData:
+        if self.phase_system.is_ph3:
+            num_loaded_conductors: int = 3
         else:
-            self.U_phase = self.U_line
+            num_loaded_conductors: int = 2
 
-    def _calc_load_current(self) -> None:
-        cP = self.phase_system.cP()
-        if self.P_elec is not None:
-            self.I_load = self.P_elec / (cP * self.U_line * self.cos_phi)
-        elif self.P_mech is not None:
-            self.P_elec = self.P_mech / self.eta
-            self.I_load = self.P_elec / (cP * self.U_line * self.cos_phi)
-        elif self.I_load is not None:
-            pass
-        else:
-            raise ValueError(
-                "Either `P_elec`, `P_mech` (and `eta`) or `I_b` must be "
-                "specified."
-            )
-        self.I_load_corr = self.I_load * self.k_simul * self.k_ext
-
-    def _calculate_cable_sizing(self) -> None:
-        if self.phase_system.three_phase:
-            self.num_loaded_conductors: int = 3
-        else:
-            self.num_loaded_conductors: int = 2
-        sizing_data = CableSizingData(
-            rated_load_current=self.I_load_corr.to('A').m,
-            length=self.L.to('m').m,
-            conductor_material=self.conductor_material,
-            insulation_material=self.insulation_material,
+        cd = CableData(
+            I_b=self.I_bc.to('A').m,
+            L=self.L.to('m').m,
+            conductor_type=self.conductor_material,
+            insulation_type=self.insulation_material,
             ambient=self.ambient,
-            amb_temperature=self.T_amb.to('degC').m,
+            T_amb=self.T_amb.to('degC').m,
             install_method=self.install_method,
             cable_mounting=self.cable_mounting,
             cable_arrangement=self.cable_arrangement,
             num_circuits=self.num_circuits,
-            num_loaded_conductors=self.num_loaded_conductors,
-            harmonic3_content=self.harmonic3_content,
+            num_loaded_conductors=num_loaded_conductors,
+            h3_content=self.h3_fraction,
         )
-        sizing_data = sizing.get_cable_sizing(sizing_data, self.sizing_based_on_I_nom)
-        self._set_attributes(sizing_data)
+        return cd
+
+    def __size_cable(self, cd: CableData) -> None:
+        cd = get_size(cd, self.sizing_based_on_I_nom)
+        self.S = Q_(cd.S, 'mm**2')
+        self.I_z = Q_(cd.I_z, 'A')
+        self.I_z0 = Q_(cd.I_z0, 'A')
+        self.I_n = Q_(cd.I_n, 'A')
+        self.I2t = Q_(cd.I2t, 'A**2*s')
         return None
 
-    def _recalculate_cable_sizing(self, S: Quantity) -> None:
-        data = sizing.set_cable_sizing(self.sizing_data, S.to('mm ** 2').m)
-        self._set_attributes(data)
+    def __update_cable_params(self, cd: CableData, S_user: Quantity) -> None:
+        cd = set_size(cd, S_user.to('mm**2').m)
+        self.S = Q_(cd.S, 'mm**2')
+        self.I_z = Q_(cd.I_z, 'A')
+        self.I_z0 = Q_(cd.I_z0, 'A')
+        self.I_n = Q_(cd.I_n, 'A')
+        self.I2t = Q_(cd.I2t, 'A**2*s')
         return None
 
-    def _set_attributes(self, sizing_data: CableSizingData) -> None:
-        self.sizing_data = sizing_data
-        self.S = Q_(self.sizing_data.cross_section_area, 'mm ** 2')
-        self.I_z = Q_(self.sizing_data.current_capacity, 'A')
-        self.I_nom = Q_(self.sizing_data.nom_current, 'A')
-        self.joule_integral = Q_(self.sizing_data.joule_integral, 'A ** 2 * s')
-        T_nom = self.sizing_data.insulation.T_max_cont
-        self.Z: dict[str, dict[int, Quantity]] = {
-            "T_20": self._calc_impedance(Q_(20, 'degC')),
-            "T_nom": self._calc_impedance(Q_(T_nom, 'degC')),
-            "T_150": self._calc_impedance(Q_(150, 'degC'))
-        }
-        return None
-
-    def _calc_impedance(self, T: Quantity) -> dict[int, Quantity]:
-        from python_electric.equipment import Cable
-        cable = Cable(
-            length=self.L,
-            cross_section_area=self.S,
-            conductor_material=ConductorMaterials.COPPER,
-            cable_arrangement=CableArrangement.MULTICORE,
-            temperature=T
-        )
-        return {1: cable.Z1, 2: cable.Z2, 0: cable.Z0}
-
-    @property
-    def has_circuit_breaker(self) -> bool:
-        return isinstance(self.circuit_breaker, CircuitBreaker)
-
-    def voltage_drop(
+    def get_impedance(
         self,
-        U_line: Quantity | None = None,
-        I_load: Quantity | None = None,
-        cos_phi: float | None = None,
-        volt_ref: VoltReference | None = None
-    ) -> None:
+        T: Quantity,
+        z0_r_factor: float = 3.0,
+        z0_x_factor: float = 3.0
+    ) -> dict[int, Quantity[complex | float]]:
         """
-        Calculates the absolute voltage drop in volts and the relative voltage
-        drop in percent of the given input voltage. Results are stored in
-        attributes `U_drop` and `U_drop_pct`.
+        Returns the positive, negative, and zero-sequence impedance of the cable
+        at the given temperature `T` of the conductors.
 
         Parameters
         ----------
-        U_line: Quantity, optional
-            Line-to-line voltage at the entry in case of a three-phase system,
-            or ground-to-line voltage at the entry in case of a single-phase
-            system.
-        I_load: Quantity, optional
-            Load current through the cable.
-        cos_phi: float, optional
-            Power factor of the current, i.e. the cosine of the phase shift
-            between voltage and current.
-        volt_ref: VoltReference, optional
-            In case of a three-phase cable, if `volt_ref` is set to
-            `VoltReference.PH3_LINE_TO_LINE`, the absolute voltage drop is
-            measured between two phase conductors, and the relative voltage drop
-            is referred to the line-to-line voltage. If `volt_ref` is set to
-            `VoltReference.PH3_GROUND_TO_LINE`, the voltage drop is measured
-            across a single line conductor with reference to ground, and the
-            relative voltage drop is referred to the ground-to-line voltage.
-            If `volt_ref` is left as None, `VoltReference.PH3_GROUND_TO_LINE`
-            will be assumed.
-            In case of a single-phase cable, parameter `volt_ref` has no real
-            use and can be left as None.
+        T: Quantity
+            Temperature of the conductors.
+        z0_r_factor: float, default 3.0
+            Scaling factor applied to the positive-sequence resistance of the
+            cable to determine its zero-sequence resistance.
+        z0_x_factor: float, default 3.0
+            Scaling factor applied to the negative-sequence reactance of the
+            cable to determine its zero-sequence reactance.
 
         Returns
         -------
-        None
+        dict[int, Quantity[complex | float]]
+            A dictionary of which the keys 1, 2, 0 map to the positive,
+            negative, and zero-sequence impedance of the cable at the given
+            temperature `T`.
         """
-        if U_line is None:
-            U_line = self.U_line
-        if I_load is None:
-            I_load = self.I_load
-        if cos_phi is None:
-            cos_phi = self.cos_phi
+        from python_electric.equipment import Cable
+        c = Cable(
+            length=self.L,
+            cross_section_area=self.S,
+            conductor_material=self.conductor_material,
+            cable_arrangement=self.cable_arrangement,
+            temperature=T,
+            z0_r_factor=z0_r_factor,
+            z0_x_factor=z0_x_factor,
+            name=self.name
+        )
+        return {1: c.Z1, 2: c.Z2, 0: c.Z0}
 
-        if self.phase_system.three_phase and volt_ref is None:
-            volt_ref = VoltReference.PH3_GROUND_TO_LINE
-        elif self.phase_system.single_phase and volt_ref is None:
-            volt_ref = VoltReference.PH1
+    def _calc_impedance_dict(self) -> dict[str, dict[int, Quantity]]:
+        insprops = INSULATION_PROPS[self.insulation_material]
+        T_nom = insprops.T_max_cont
+        T_rng = {"T20": Q_(20, 'degC'), "T_n": Q_(T_nom, 'degC'), "T150": Q_(150, 'degC')}
+        return {k: self.get_impedance(v) for k, v in T_rng.items()}
 
-        R = self.Z["T_nom"][1].real
-        X = self.Z["T_nom"][1].imag
+    def get_voltage_drop(
+        self,
+        U_l: Quantity,
+        I_b: Quantity,
+        cos_phi: float,
+        volt_ref: VoltReference | None = None
+    ) -> tuple[Quantity, Quantity]:
+        """
+        Returns the voltage drop across the cable at the given load conditions.
 
-        # noinspection PyTypeChecker
-        U_drop = voltage_drop(R, X, I_load, volt_ref, cos_phi)
+        Parameters
+        ----------
+        U_l: Quantity
+            Line-to-line voltage in case of a three-phase cable. Otherwise,
+            in case of a single-phase cable, the neutral/ground-to-line voltage
+            (phase voltage).
+        I_b: Quantity
+            Load current.
+        cos_phi: float
+            Power factor of the load.
+        volt_ref: VoltReference | None = None
+            In case of a three-phase cable, it indicates the reference of the
+            voltage measurement: either the voltage drop is measured between
+            ground (neutral) and a line, or it is measured between two lines.
+            If `None`, voltage drop is taken between ground/neutral and a line.
+        """
+        if volt_ref is None:
+            if self.phase_system.is_ph3:
+                volt_ref = VoltReference.PH3_GROUND_TO_LINE
+            if self.phase_system.is_ph1:
+                volt_ref = VoltReference.PH1
 
-        U = U_line
-        if self.phase_system.three_phase and volt_ref == VoltReference.PH3_GROUND_TO_LINE:
-            U = U_line / math.sqrt(3)
-        U_drop_pct = 100 * U_drop / U.to('V').m
+        R = Q_(self.Z_dict["T_n"][1].m.real, 'ohm')
+        X = Q_(self.Z_dict["T_n"][1].m.imag, 'ohm')
+        dU = voltage_drop(R, X, I_b, volt_ref, cos_phi)
 
-        self.U_drop = Q_(U_drop, 'V')
-        self.U_drop_pct = Q_(U_drop_pct, 'pct')
-        return None
+        U = U_l.to('V')
+        if volt_ref == VoltReference.PH3_GROUND_TO_LINE:
+            U = U / math.sqrt(3)
+        dU_rel = dU / U
+        return dU, dU_rel.to('pct')
 
     def connect_circuit_breaker(
         self,
         standard: CircuitBreaker.Standard,
         category: CircuitBreaker.Category,
-        ultim_break_capacity: Quantity,
+        I_cu: Quantity,
         I_sc_max: Quantity,
         I_sc_min: Quantity,
-        k_magn_trip: float | None = None,
-        E_through: Quantity | None = None,
-        t_m_lim: Quantity | None = None
+        k_m: float | None = None,
+        E_t: Quantity | None = None,
+        t_m: Quantity | None = None
     ) -> None:
-        """
-        Connects a circuit breaker with the bus bars.
-
-        Parameters
-        ----------
-        standard: CircuitBreaker.Standard
-            Either the residential standard (IEC 60898-1) or the industrial
-            standard (IEC 60947-2), which specifies the minimal performance
-            requirements of the circuit breaker. See enum
-            CircuitBreaker.Standard.
-        category: CircuitBreaker.Category
-            Specifies the category of the circuit breaker depending on its
-            magnetic trip threshold. Either category B, C, D, or AJUSTABLE. See
-            enum CircuitBreaker.Category. Note that category ADJUSTABLE also
-            demands that the circuit breaker is of the industrial type.
-        ultim_break_capacity: Quantity
-            Ultimate breaking capacity of the circuit breaker.
-        I_sc_max: Quantity
-            Calculated maximum short-circuit current at the location of the
-            circuit breaker (most often caused by a three-phase fault).
-        I_sc_min: Quantity
-            Calculated minimum short-circuit current at the end of the cable
-            (usually caused by a single line-to-ground fault).
-        k_magn_trip: float, optional
-            Multiplication factor that determines the rated magnetic trip
-            current as a multiple of the thermal current setting if the circuit
-            breaker is of the industrial type and adjustable.
-        E_through: Quantity, optional
-            Thermal energy (I²t) let through by the circuit breaker at the
-            calculated maximum short-circuit current.
-        t_m_lim: Quantity, optional
-            Upper limit of instantaneous magnetic tripping time with regard to
-            short-circuits. By default, this time limit is set to 100 ms
-            according to the residential standard IEC 60898-1.
-        """
         cb = CircuitBreaker(
             standard=standard,
             category=category,
-            load_current=self.I_load,
-            nom_current=self.I_nom,
-            ampacity=self.I_z,
-            joule_integral=self.joule_integral,
-            ultim_break_capacity=ultim_break_capacity,
-            let_through_energy=E_through,
-            k_magn_trip=k_magn_trip,
-            t_m_lim=t_m_lim
+            I_b=self.I_b,
+            I_n=self.I_n,
+            I_z=self.I_z,
+            I2t=self.I2t,
+            I_cu=I_cu,
+            E_t=E_t,
+            k_m=k_m,
+            t_m=t_m
         )
-        cb.check_overload_protection()
-        cb.check_shortcircuit_protection(I_sc_max, I_sc_min)
+        c1 = cb.check_overload_protection()
+        c2 = cb.check_shortcircuit_protection(I_sc_max, I_sc_min)
+        if not (c1 and c2):
+            raise ValueError("Circuit-breaker protection is inadequate.")
         self.circuit_breaker = cb
         self.I_sc_max = I_sc_max
         self.I_sc_min = I_sc_min
         return None
+
+    @property
+    def has_circuit_breaker(self) -> bool:
+        return isinstance(self.circuit_breaker, CircuitBreaker)
 
     def check_indirect_contact_protection(
         self,
@@ -467,41 +426,10 @@ class AbstractCable(ABC):
         final_circuit: bool = True,
         neutral_distributed: bool = True,
         R_e: Quantity | None = None
-    ) -> IndirectContactProtectionResult | None:
-        """
-        Returns the requirements so that the circuit breaker to which the
-        cable is connected also protects against indirect contact in a
-        low-voltage system.
-
-        Parameters
-        ----------
-        S_pe: Quantity, optional
-            Cross-sectional area of the earth protective conductor. If given, it
-            overrides the value of instance attribute `self.S_pe`.
-        skin_condition: str, {"BB1", "BB2" (default)}
-            Code that identifies the condition of the human skin: either dry
-            (BB1) or wet (BB2).
-        final_circuit: bool, default True
-            Indicates that the cable directly feeds a consumer (of which the
-            nominal current does not exceed 32 A).
-        neutral_distributed: bool, default True
-            For IT-earthing systems only.
-            Indicates whether the neutral conductor is also distributed in the
-            network or not.
-        R_e: Quantity | None
-            For IT-earthing systems only.
-            Spreading resistance of the earth electrodes in case the two exposed
-            conductive parts in the fault loop are both connected to different,
-            separate earth electrodes. It is assumend that all earth electrodes
-            in the consumer installation have the same spreading resistance.
-
-        Returns
-        -------
-        IndirectContactProtectionResult | None
-        """
+    ) -> ICPResult | None:
         if self.earthing_system.is_TN():
             return earthing_system.TN.check_indirect_contact(
-                U_phase=self.U_phase,
+                U_phase=self.U_ph,
                 L_cable=self.L,
                 S_phase=self.S,
                 conductor_material=self.conductor_material,
@@ -512,7 +440,7 @@ class AbstractCable(ABC):
             )
         elif self.earthing_system.is_IT():
             return earthing_system.IT.check_indirect_contact(
-                U_phase=self.U_phase,
+                U_phase=self.U_ph,
                 L_cable=self.L,
                 S_phase=self.S,
                 conductor_material=self.conductor_material,
@@ -526,28 +454,20 @@ class AbstractCable(ABC):
         return None
 
 
-class ThreePhaseCable(AbstractCable):
-    phase_system = PhaseSystem.THREE_PHASE
-
-
-class SinglePhaseCable(AbstractCable):
-    phase_system = PhaseSystem.SINGLE_PHASE
-
-
-def plot_cable_characteristic(cable: AbstractCable):
+def plot_cable_characteristic(cable: Cable):
     t_min, t_max = 1e-6, 1e6
     t_5s = 5.0
-    ji = cable.joule_integral.to('A ** 2 * s').m
+    I2t = cable.I2t.to('A ** 2 * s').m
     I_z = cable.I_z.to('A').m
     I_min = 1e-3
 
     t_adiabatic_ar1 = np.linspace(t_min, t_5s)
-    I_adiabatic_ar1 = np.sqrt(ji / t_adiabatic_ar1)
+    I_adiabatic_ar1 = np.sqrt(I2t / t_adiabatic_ar1)
     I_max = np.max(I_adiabatic_ar1)
 
-    t_ampacity_ini = ji / (I_z ** 2)
+    t_ampacity_ini = I2t / (I_z ** 2)
     t_adiabatic_ar_2 = np.linspace(t_5s, t_ampacity_ini)
-    I_adiabatic_ar_2 = np.sqrt(ji / t_adiabatic_ar_2)
+    I_adiabatic_ar_2 = np.sqrt(I2t / t_adiabatic_ar_2)
 
     t_ampacity_ar = np.linspace(t_ampacity_ini, t_max)
     I_ampacity_ar = np.array([I_z for _ in range(len(t_ampacity_ar))])
@@ -581,7 +501,7 @@ def plot_cable_characteristic(cable: AbstractCable):
         t_conv = cable.circuit_breaker.t_conv.to('s').m
         I_m_min = cable.circuit_breaker.I_m_min.to('A').m
         I_m_max = cable.circuit_breaker.I_m_max.to('A').m
-        t_m_lim = cable.circuit_breaker.t_m_lim.to('s').m
+        t_m_lim = cable.circuit_breaker.t_m.to('s').m
         I_cu = cable.circuit_breaker.I_cu.to('A').m
         I_sc_min = cable.I_sc_min.to('A').m
         I_sc_max = cable.I_sc_max.to('A').m
@@ -641,8 +561,8 @@ class SelectivityResult:
 
 
 def check_selectivity(
-    cable_up: AbstractCable,
-    cable_down: AbstractCable,
+    cable_up: Cable,
+    cable_down: Cable,
 ) -> SelectivityResult:
     """
     Checks the selectivity between the circuit breaker of the downstream cable
@@ -707,13 +627,13 @@ def check_selectivity(
                 return SelectivityResult(total=True, exists=True)
             elif not cb_up.has_adjustable_delay:
                 return SelectivityResult(total=False, exists=True)
-            t_cable_max = cable_up.joule_integral / I_sc_max_down ** 2
+            t_cable_max = cable_up.I2t / I_sc_max_down ** 2
             I_sc_min_up = cable_up.I_sc_min
-            t_cable_min_up = cable_up.joule_integral / I_sc_min_up ** 2
+            t_cable_min_up = cable_up.I2t / I_sc_min_up ** 2
             res = cable_up.check_indirect_contact_protection(final_circuit=False)
             t_safety_max = res.t_c_max
             t_trip_max = min(t_cable_max, t_cable_min_up, t_safety_max)
-            t_margin = t_trip_max - cb_up.t_m_lim
+            t_margin = t_trip_max - cb_up.t_m
             return SelectivityResult(
                 total=True,
                 exists=True,

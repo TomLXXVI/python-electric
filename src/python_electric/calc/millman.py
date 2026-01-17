@@ -58,7 +58,7 @@ class MillmanTheorem:
         self._I_n = sum(self._I)
 
     @property
-    def deltaU_neutral(self) -> complex:
+    def dU_neutral(self) -> complex:
         """
         Returns the voltage difference of the load-side neutral with respect to
         the source-side neutral in volts.

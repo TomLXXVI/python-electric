@@ -2,20 +2,20 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 __all__ = [
-    "Insulation",
-    "InsulationMaterials",
-    "INSULATION_MATERIALS"
+    "InsulationProperties",
+    "InsulationMaterial",
+    "INSULATION_PROPS"
 ]
 
 
 @dataclass(frozen=True)
-class Insulation:
+class InsulationProperties:
     type: str
     T_max_cont: float   # degC
     T_max_short: float  # degC
 
 
-class InsulationMaterials(StrEnum):
+class InsulationMaterial(StrEnum):
     PVC = "PVC"
     RUBBER = "RUBBER"
     XLPE = "XLPE"
@@ -24,9 +24,9 @@ class InsulationMaterials(StrEnum):
     B = "B"
 
 
-INSULATION_MATERIALS: dict[str, Insulation] = {
-    "PVC": Insulation("PVC", 70.0, 160.0),
-    "RUBBER": Insulation("RUBBER", 60.0, 200.0),
-    "XLPE": Insulation("XLPE", 90.0, 250.0),
-    "EPR": Insulation("EPR", 90.0, 250.0)
+INSULATION_PROPS: dict[str, InsulationProperties] = {
+    "PVC": InsulationProperties("PVC", 70.0, 160.0),
+    "RUBBER": InsulationProperties("RUBBER", 60.0, 200.0),
+    "XLPE": InsulationProperties("XLPE", 90.0, 250.0),
+    "EPR": InsulationProperties("EPR", 90.0, 250.0)
 }

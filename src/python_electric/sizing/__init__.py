@@ -1,6 +1,4 @@
 """
-Cable sizing utilities for building electrical installations.
+Calculation methods for sizing network components.
 """
 from .cable import *
-from .transformer import *
-from .bus_bars import *

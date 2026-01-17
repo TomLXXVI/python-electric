@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 import warnings
 
-from .. import Quantity
+from .. import Quantity, Q_
 
 
 __all__ = [
@@ -12,8 +12,6 @@ __all__ = [
     "ProtectionWarning",
     "SelectivityWarning"
 ]
-
-Q_ = Quantity
 
 
 class ProtectionWarning(Warning):
@@ -31,9 +29,9 @@ class CircuitBreaker:
 
     Attributes
     ----------
-    I_load: Quantity
+    I_b: Quantity
         Rated load current through the protected cable.
-    I_nom: Quantity
+    I_n: Quantity
         Standardized nominal current which is just greater than or equal to
         the rated load current.
     I_r: Quantity
@@ -55,7 +53,7 @@ class CircuitBreaker:
         Lower limit of magnetic tripping current with regard to short-circuits.
     I_m_max: Quantity
         Upper limit of magnetic tripping current with regard to short-circuits.
-    E_through: Quantity
+    E_t: Quantity
         Thermal energy (I²t) let through by the circuit breaker at the
         calculated maximum short-circuit current during the time that is
         needed to interupt the current.
@@ -75,14 +73,14 @@ class CircuitBreaker:
         self,
         standard: CircuitBreaker.Standard,
         category: CircuitBreaker.Category,
-        load_current: Quantity,
-        nom_current: Quantity,
-        ampacity: Quantity,
-        joule_integral: Quantity | None,
-        ultim_break_capacity: Quantity,
-        let_through_energy: Quantity | None = None,
-        k_magn_trip: float | None = None,
-        t_m_lim: Quantity | None = None
+        I_b: Quantity,
+        I_n: Quantity,
+        I_z: Quantity,
+        I2t: Quantity | None,
+        I_cu: Quantity,
+        E_t: Quantity | None = None,
+        k_m: float | None = None,
+        t_m: Quantity | None = None
     ) -> None:
         """
         Creates a `CircuitBreaker` object.
@@ -99,62 +97,62 @@ class CircuitBreaker:
             magnetic trip threshold. Either category B, C, D, or AJUSTABLE. See
             enum CircuitBreaker.Category. Note that category ADJUSTABLE also
             demands that the circuit breaker is of the industrial type.
-        load_current: Quantity
+        I_b: Quantity
             Rated load current through the protected cable.
-        nom_current: Quantity
+        I_n: Quantity
             Standardized nominal current which is just greater than or equal to
             the rated load current.
-        ampacity: Quantity
+        I_z: Quantity
             Current-carrying capacity of the protected cable.
-        joule_integral: Quantity | None
+        I2t: Quantity | None
             Joule-integral of the cable, i.e. the maximum thermal energy,
             usually expressed in square amperes x seconds, the conductors are
             capable to store without thermal degradation of the insulation
             assuming adiabatic heating (i.e. without heat transfer to the
             ambient). Set to None, if the joule integral is not known.
-        ultim_break_capacity: Quantity
+        I_cu: Quantity
             Ultimate breaking capacity of the circuit breaker.
-        let_through_energy: Quantity, optional
+        E_t: Quantity, optional
             Thermal energy (I²t) let through by the circuit breaker at the
             calculated maximum short-circuit current during the time that is
             needed to interupt the current.
-        k_magn_trip: float, optional
+        k_m: float, optional
             Multiplication factor that determines the rated magnetic trip 
             current as a multiple of the thermal current setting if the circuit 
             breaker is of the industrial type and adjustable.
-        t_m_lim: Quantity, optional
+        t_m: Quantity, optional
             Upper limit of instantaneous magnetic tripping time with regard to
             short-circuits. By default, this time limit is set to 100 ms
             according to the residential standard IEC 60898-1.
         """
         self.standard = standard
         self.category = category
-        self.I_load = load_current.to('A')
-        self.I_nom = nom_current.to('A')
+        self.I_b = I_b.to('A')
+        self.I_n = I_n.to('A')
 
         if (self.standard == CircuitBreaker.Standard.INDUSTRIAL
             and self.category == CircuitBreaker.Category.ADJUSTABLE):
-            self.I_r = self.I_load
+            self.I_r = self.I_b
         else:
-            self.I_r = self.I_nom
+            self.I_r = self.I_n
 
-        self.I_z = ampacity.to('A')
+        self.I_z = I_z.to('A')
 
         self.joule_integral = None
-        if joule_integral is not None:
-            self.joule_integral = joule_integral.to('A ** 2 * s')
+        if I2t is not None:
+            self.joule_integral = I2t.to('A ** 2 * s')
 
-        self.I_cu = ultim_break_capacity.to('A')
+        self.I_cu = I_cu.to('A')
 
-        self.E_through = None
-        if let_through_energy is not None:
-            self.E_through = let_through_energy.to('A ** 2 * s')
+        self.E_t = None
+        if E_t is not None:
+            self.E_t = E_t.to('A ** 2 * s')
 
-        self.k_magn_trip = k_magn_trip
+        self.k_m = k_m
 
-        self.t_m_lim = t_m_lim
-        if self.t_m_lim is None:
-            self.t_m_lim = self._get_magn_trip_time_limit()
+        self.t_m = t_m
+        if self.t_m is None:
+            self.t_m = self._get_magn_trip_time_limit()
 
         # Characteristics of the circuit breaker according to standards:
         self.I_nf = self._get_conv_non_trip_current()
@@ -200,8 +198,8 @@ class CircuitBreaker:
                     return 12 * self.I_r * (1.0 - 0.2)
             case CircuitBreaker.Category.ADJUSTABLE:
                 if self.standard == CircuitBreaker.Standard.INDUSTRIAL:
-                    if self.k_magn_trip is not None:
-                        return self.k_magn_trip * self.I_r * (1.0 - 0.2)
+                    if self.k_m is not None:
+                        return self.k_m * self.I_r * (1.0 - 0.2)
                     else:
                         raise AttributeError(
                             "Parameter `K_magn_trip` cannot be None."
@@ -230,8 +228,8 @@ class CircuitBreaker:
                     return 12.0 * self.I_r * (1.0 + 0.2)
             case CircuitBreaker.Category.ADJUSTABLE:
                 if self.standard == CircuitBreaker.Standard.INDUSTRIAL:
-                    if self.k_magn_trip is not None:
-                        return self.k_magn_trip * self.I_r * (1.0 + 0.2)
+                    if self.k_m is not None:
+                        return self.k_m * self.I_r * (1.0 + 0.2)
                     else:
                         raise AttributeError(
                             "Parameter `K_magn_trip` cannot be None."
@@ -272,7 +270,7 @@ class CircuitBreaker:
         -------
         bool
         """
-        I_b = self.I_load
+        I_b = self.I_b
         I_n = self.I_r
         I_z = self.I_z
         I_nf = self.I_nf
@@ -357,8 +355,8 @@ class CircuitBreaker:
         if self.joule_integral is not None:
             self.joule_integral.ito('A ** 2 * s')
 
-            if self.E_through is not None:
-                E_through = self.E_through.to('A ** 2 * s')
+            if self.E_t is not None:
+                E_through = self.E_t.to('A ** 2 * s')
 
                 if self.joule_integral >= E_through:
                     pass
@@ -371,7 +369,7 @@ class CircuitBreaker:
                     return False
 
             t_allow = self.joule_integral / (I_sc_min ** 2)
-            if self.t_m_lim.to('s') <= t_allow.to('s'):
+            if self.t_m.to('s') <= t_allow.to('s'):
                 pass
             else:
                 warnings.warn(
@@ -384,14 +382,14 @@ class CircuitBreaker:
         return True
     
     def __str__(self):
-        s =  f"I_n     = {self.I_nom.to('A'):~P.1f}\n"
+        s =  f"I_n     = {self.I_n.to('A'):~P.1f}\n"
         s += f"I_r     = {self.I_r.to('A'):~P.1f}\n"
         s += f"I_nf    = {self.I_nf.to('A'):~P.1f}\n"
         s += f"I_f     = {self.I_f.to('A'):~P.1f}\n"
         s += f"t_conv  = {self.t_conv.to('h'):~P.1f}\n"
         s += f"I_m_min = {self.I_m_min.to('A'):~P.1f}\n"
         s += f"I_m_max = {self.I_m_max.to('A'):~P.1f}\n"
-        s += f"t_m_lim = {self.t_m_lim.to('s'):~P.1f}"
+        s += f"t_m_lim = {self.t_m.to('s'):~P.1f}"
         return s
 
 

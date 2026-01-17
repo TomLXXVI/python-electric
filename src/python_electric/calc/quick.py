@@ -1,80 +1,91 @@
 import math
 
-from .. import Quantity
-from ..general import VoltReference
+from .. import Quantity, Q_, VoltReference, PhaseSystem
 
-Q_ = Quantity
 
 __all__ = [
-    "get_3ph_line_current",
-    "get_1ph_line_current",
+    "load_current",
     "voltage_drop"
 ]
 
 
-def get_3ph_line_current(
-    P: float | Quantity,
-    U_line: float | Quantity,
-    cos_phi: float = 1.0
-) -> float:
-    if isinstance(P, Quantity):
-        P = P.to('W').m
-    if isinstance(U_line, Quantity):
-        U_line = U_line.to('V').m
-    I = P / (math.sqrt(3) * U_line * cos_phi)
-    return I
-
-
-def get_1ph_line_current(
-    P: float | Quantity,
-    U_phase: float | Quantity,
-    cos_phi: float = 1.0
-) -> float:
-    if isinstance(P, Quantity):
-        P = P.to('W').m
-    if isinstance(U_phase, Quantity):
-        U_phase = U_phase.to('V').m
-    I = P / (U_phase * cos_phi)
-    return I
-
-
-def voltage_drop(
-    R: float | Quantity,
-    X: float | Quantity,
-    I: float | Quantity,
-    volt_ref: VoltReference,
-    cos_phi: float = 0.8
-) -> float:
+def load_current(
+    U_l: Quantity,
+    cos_phi: float,
+    P_e: Quantity | None = None,
+    P_m: Quantity | None = None,
+    eta: Quantity = Q_(100, 'pct'),
+    phase_system: PhaseSystem = PhaseSystem.PH3
+) -> Quantity:
     """
-    Returns the voltage drop in volts.
+    Returns the load current when load power is given (either electrical power
+    or mechanical power).
 
     Parameters
     ----------
-    R: float | Quantity
-        Resistance of cable conductor in ohms (if float).
-    X: float | Quantity
-        Reactance of cable conductor in ohms (if float).
-    I: float | Quantity
-        Current through the cable in amperes (if float).
-    volt_ref: VoltReference
-        Indicates the reference against which the voltage is measured. See enum
-        VoltageRef.
-    cos_phi: float, default 0.8
-        Power factor of the current.
+    U_l: Quantity
+        Line-to-line voltage in case of a three-phase network, or neutral-to-line
+        voltage in case of a single-phase network.
+    cos_phi: float
+        Power factor.
+    P_e: Quantity, optional
+        Electrical power.
+    P_m: Quantity, optional
+        Mechanical power.
+    eta: Quantity, optional
+        Electromechanical efficiency.
+    phase_system:
+        Indicates if the electrical network is either three- or a single-phase.
 
     Returns
     -------
-    float
+    Quantity
     """
-    if isinstance(R, Quantity):
-        R = R.to('ohm').m
-    if isinstance(X, Quantity):
-        X = X.to('ohm').m
-    if isinstance(I, Quantity):
-        I = I.to('A').m
+    cP = phase_system.cP()
+    if P_e is not None:
+        I_b = P_e / (cP * U_l * cos_phi)
+        return I_b.to('A')
+    elif P_m is not None:
+        P_e = P_m / eta
+        I_b = P_e / (cP * U_l * cos_phi)
+        return I_b.to('A')
+    else:
+        raise ValueError(f"Either 'P_e', or 'P_m' and 'eta' must be specified.")
+
+
+def voltage_drop(
+    R: Quantity,
+    X: Quantity,
+    I: Quantity,
+    volt_ref: VoltReference,
+    cos_phi: float = 0.8
+) -> Quantity:
+    """
+    Returns voltage drop.
+
+    Parameters
+    ----------
+    R: Quantity
+        Resistance of cable conductors.
+    X: Quantity
+        Reactance of cable conductors.
+    I: Quantity
+        Load current through cable.
+    volt_ref: VoltReference
+        Reference of voltage measurement. See enum `VoltReference`.
+    cos_phi: float, default 0.8
+        Power factor of the load current.
+
+    Returns
+    -------
+    Quantity
+    """
+    R = R.to('ohm').m
+    X = X.to('ohm').m
+    I = I.to('A').m
     sin_phi = math.sqrt(1.0 - cos_phi ** 2)
     U_drop = volt_ref.value * I * (R * cos_phi + X * sin_phi)
-    return U_drop
+    return Q_(U_drop, 'V')
 
 
 def delta_to_star(

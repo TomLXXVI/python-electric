@@ -2,9 +2,9 @@ import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-from .. import Quantity
+from .. import Quantity, Q_
 from ..utils.lookup_table import LookupTable
-from ..materials import ConductorMaterials, InsulationMaterials, Soil, SOIL_RESISTIVITY
+from ..materials import ConductorMaterial, InsulationMaterial, Soil, SOIL_RESISTIVITY
 
 __all__ = [
     "LoopEarthElectrode",
@@ -14,19 +14,18 @@ __all__ = [
 ]
 
 PI = math.pi
-Q_ = Quantity
 
 
 def create_k_factor_table_1():
     row_header = [
-        ConductorMaterials.COPPER.value,
-        ConductorMaterials.ALUMINIUM.value,
-        ConductorMaterials.STEEL.value
+        ConductorMaterial.COPPER.value,
+        ConductorMaterial.ALUMINIUM.value,
+        ConductorMaterial.STEEL.value
     ]
     col_header = [
-        InsulationMaterials.PVC.value,
-        InsulationMaterials.EPR.value,
-        InsulationMaterials.B.value
+        InsulationMaterial.PVC.value,
+        InsulationMaterial.EPR.value,
+        InsulationMaterial.B.value
     ]
     data = [
         [143, 176, 160],
@@ -47,13 +46,13 @@ def create_k_factor_table_1():
 
 def create_k_factor_table_2():
     row_header = [
-        ConductorMaterials.COPPER.value,
-        ConductorMaterials.ALUMINIUM.value,
+        ConductorMaterial.COPPER.value,
+        ConductorMaterial.ALUMINIUM.value,
     ]
     col_header = [
-        InsulationMaterials.PVC.value,
-        InsulationMaterials.EPR.value,
-        InsulationMaterials.B.value
+        InsulationMaterial.PVC.value,
+        InsulationMaterial.EPR.value,
+        InsulationMaterial.B.value
     ]
     data = [
         [115, 143, 134],
@@ -119,16 +118,16 @@ class RodEarthElectrode(EarthElectrode):
 
 @dataclass
 class PEConductor:
-    conductor_material: ConductorMaterials
-    insulation_material: InsulationMaterials
+    conductor_material: ConductorMaterial
+    insulation_material: InsulationMaterial
     seperate: bool
 
     k: float = field(init=False, default=0.0)
     S: Quantity = field(init=False, default=None)
 
     def __post_init__(self):
-        if self.insulation_material == InsulationMaterials.PRC:
-            self._insulation_material = InsulationMaterials.EPR
+        if self.insulation_material == InsulationMaterial.PRC:
+            self._insulation_material = InsulationMaterial.EPR
         else:
             self._insulation_material = self.insulation_material
 
@@ -178,7 +177,7 @@ class EarthConductor(PEConductor):
         S = super().cross_section_area(I_f, t_u, False)
         if protected:
             S = max(S.m, 16.0)
-        elif self.conductor_material == ConductorMaterials.COPPER:
+        elif self.conductor_material == ConductorMaterial.COPPER:
             S = max(S.m, 25.0)
         else:
             S = max(S.m, 50.0)

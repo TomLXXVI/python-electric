@@ -1,6 +1,6 @@
 """
-Implementation of the sizing routine for electrical cables, i.e. to determine 
-the cross-sectional area, current-carrying capacity, and nominal current of the 
+Implements the sizing of electrical cables, i.e. the routines to determine the
+cross-sectional area, current-carrying capacity, and nominal current of the
 loaded conductors.
 
 References
@@ -15,23 +15,23 @@ from dataclasses import dataclass, field
 
 from ...utils.lookup_table import LookupTable
 from ...materials import (
-    ConductorMaterials,
-    CONDUCTOR_MATERIALS,
-    InsulationMaterials,
-    INSULATION_MATERIALS
+    ConductorMaterial,
+    CONDUCTOR_PROPS,
+    InsulationMaterial,
+    INSULATION_PROPS
 )
 from .ampacity import unburied
 from .ampacity import buried
 
 __all__ = [
     "Ambient",
-    "InstallationMethods",
+    "InstallMethod",
     "CableMounting",
     "CableArrangement",
     "CABLE_UNIT_REACTANCES",
-    "CableSizingData",
-    "get_cable_sizing",
-    "set_cable_sizing",
+    "CableData",
+    "get_size",
+    "set_size",
     "get_nominal_current",
 ]
 
@@ -95,7 +95,7 @@ CABLE_UNIT_REACTANCES: dict[str, float] = {  # ohm / m
 }
 
 
-class InstallationMethods(StrEnum):
+class InstallMethod(StrEnum):
     A1 = "A1"
     A2 = "A2"
     B1 = "B1"
@@ -104,6 +104,16 @@ class InstallationMethods(StrEnum):
     D = "D"
     E = "E"
     F = "F"
+
+    @property
+    def unburied(self) -> bool:
+        if self is not InstallMethod.D:
+            return True
+        return False
+    
+    @property
+    def buried(self) -> bool:
+        return not self.unburied
 
 
 class Ambient(StrEnum):
@@ -171,7 +181,7 @@ def _lookup_T_cmax(insulation: str, short_time: bool = False) -> float:
     ------
     ValueError if the insulation type is unknown.
     """
-    ins = INSULATION_MATERIALS.get(insulation.upper())
+    ins = INSULATION_PROPS.get(insulation.upper())
     if ins is None:
         raise ValueError(f"Unknown insulation type: {insulation}.")
     if short_time:
@@ -257,7 +267,7 @@ def _joule_integral(conductor: str, insulation: str, S: float) -> float:
     float
     """
     T_20 = 20.0  # °C
-    cond = CONDUCTOR_MATERIALS[conductor]
+    cond = CONDUCTOR_PROPS[conductor]
     T_1 = _lookup_T_cmax(insulation)  # °C
     T_2 = _lookup_T_cmax(insulation, short_time=True)  # °C
     cp = cond.specific_heat  # J/(kg.K)
@@ -276,30 +286,26 @@ def _joule_integral(conductor: str, insulation: str, S: float) -> float:
 
 
 @dataclass
-class CableSizingData:
+class CableData:
     """
-    Class for sizing electrical cables in low-voltage systems.
-
-    After instantiation, call method `size()` to size the cable. After a
-    cable has been sized, the voltage drop across the cable can be calculated
-    with method `voltage_drop()`.
+    Dataclass used for sizing an electrical cable.
 
     Parameters
     ----------
-    rated_load_current: float
+    I_b: float
         The rated current through the cable in amperes.
-    length: float
+    L: float
         Cable length in meters.
-    conductor_material: ConductorMaterials
-        Conductor material. See enum ConductorMaterials.
-    insulation_material: InsulationMaterials
-        Insulation material. See enum InsulationMaterials.
+    conductor_type: ConductorMaterial
+        Conductor material. See enum ConductorMaterial.
+    insulation_type: InsulationMaterial
+        Insulation material. See enum InsulationMaterial.
     ambient: Ambient
         The ambient where the cable is installed. See enum Ambient.
-    amb_temperature: float.
+    T_amb: float.
         Steady-state operating temperature of the cable in degrees Celsius.
-    install_method: InstallationMethods
-        The installation method of the cable. See enum InstallationMethods.
+    install_method: InstallMethod
+        The installation method of the cable. See enum InstallationMethod.
     cable_mounting: CableMounting
         Specifies in more detail the way cables are mounted. See enum
         CableMounting.
@@ -312,197 +318,173 @@ class CableSizingData:
     num_loaded_conductors: int, {2, 3 (default)}
         Number of loaded conductors in the cable/ single-core cables in the
         conduit.
-    harmonic3_content: float, default 0.0
+    h3_content: float, default 0.0
         Fraction of third-order harmonics present in the total current,
         a number between 0.0 and 1.0.
 
     Attributes
     ----------
-    cross_section_area: float, default 0.0
-        Cross-sectional area of the conductors in square millimeters, calculated
-        by calling function size().
-    current_capacity: float, default 0.0
+    S: float, default 0.0
+        Cross-sectional area of the cable conductors in square millimeters.
+    I_z: float, default 0.0
         Current-carrying capacity of the conductors in amperes at actual
-        installation conditions, calculated by calling function size().
-    current_capacity_ref: float, default 0.0
+        installation conditions.
+    I_z0: float, default 0.0
         Current-carrying capacity of the conductors in amperes at standard
-        installation conditions, calculated by calling function size().
-    nom_current: float, default 0.0
+        installation conditions.
+    I_n: float, default 0.0
         Standardized nominal current in amperes which is just greater than the
         rated load current of the cable, and that can be used for the
-        current-protection device. Calculated by calling function size().
-    sizing_factor: float, default 0.0
+        current-protection device.
+    k_z: float, default 0.0
         Total reduction factor to be applied to the current-carrying capacity of
-        the cable at standard installation conditions, determined by calling
-        function size().
-    joule_integral: float, default 0.0
-        Joule integral of the cable in A².s, determined by calling function
-        size()
+        the cable at standard installation conditions.
+    I2t: float, default 0.0
+        Joule integral of the cable in A².s.
     """
-    rated_load_current: float # A
-    length: float  # m
-    conductor_material: ConductorMaterials
-    insulation_material: InsulationMaterials
+    I_b: float # A
+    L: float  # m
+    conductor_type: ConductorMaterial
+    insulation_type: InsulationMaterial
     ambient: Ambient
-    amb_temperature: float  # degC
-    install_method: InstallationMethods
+    T_amb: float  # degC
+    install_method: InstallMethod
     cable_mounting: CableMounting
     cable_arrangement: CableArrangement
     num_circuits: int = 1
     num_loaded_conductors: int = 3
-    harmonic3_content: float = 0.0  # fraction 0..1
+    h3_content: float = 0.0  # fraction 0..1
 
-    cross_section_area: float = field(init=False, default=0.0)  # mm²
-    current_capacity: float = field(init=False, default=0.0)  # A
-    current_capacity_ref: float = field(init=False, default=0.0)  # A
-    nom_current: float = field(init=False, default=0.0)  # A
-    sizing_factor: float = field(init=False, default=0.0)
-    joule_integral: float = field(init=False, default=0.0)  # A².s
+    S: float = field(init=False, default=0.0)  # mm²
+    I_z: float = field(init=False, default=0.0)  # A
+    I_z0: float = field(init=False, default=0.0)  # A
+    I_n: float = field(init=False, default=0.0)  # A
+    k_z: float = field(init=False, default=0.0)
+    I2t: float = field(init=False, default=0.0)  # A².s
 
     def __post_init__(self):
-        self.conductor = CONDUCTOR_MATERIALS[self.conductor_material]
-        self.insulation = INSULATION_MATERIALS[self.insulation_material]
-        self._install_methods_unburied = (
-            InstallationMethods.A1,
-            InstallationMethods.A2,
-            InstallationMethods.B1,
-            InstallationMethods.B2,
-            InstallationMethods.C,
-            InstallationMethods.E,
-            InstallationMethods.F
-        )
-        self._install_methods_buried = (
-            InstallationMethods.D,
-        )
+        self.cond_props = CONDUCTOR_PROPS[self.conductor_type]
+        self.insul_props = INSULATION_PROPS[self.insulation_type]
+    
+    def update(self, k, I_z0, S, I_n) -> None:
+        I_z = k * I_z0  # current-carrying capacity at actual conditions
+        self.k_z = k
+        self.S = S
+        self.I_z = I_z
+        self.I_z0 = I_z0
+        self.I_n = I_n
+        self.I2t = _joule_integral(self.cond_props.type, self.insul_props.type, S)
 
 
-def get_cable_sizing(cable_data: CableSizingData, based_on_I_nom: bool = True) -> CableSizingData:
+def get_size(
+    cable_data: CableData,
+    based_on_I_nom: bool = True
+) -> CableData:
     """
-    Sizes the cable. Returns the required cross-sectional area of the
-    conductors in square millimeters.
+    Determines the required minimal cross-sectional area S of the cable
+    conductors in square millimeters (mm²).
 
     Parameters
     ----------
     cable_data:
-        Instance of `CableData` holding the data that is needed to size the
-        cable.
+        Instance of `CableSizingData` holding data about the cable needed to
+        determine the required minimal cross-sectional area of the cable
+        conductors.
     based_on_I_nom: bool, default True
-        Indicates that the determination of the cross-sectional area of the
-        conductors should be based on the next standardized nominal current
-        greater than the rated load current. If False, conductors are sized
-        based on the rated load current.
+        Indicates that the cross-sectional area of the cable conductors needs to
+        be determined based on the next standardized nominal current which is
+        just greater than the rated load current. If False, conductors are sized
+        based on the rated load current of the cable.
     """
     k_T = _temperature_correction(
-        cable_data.insulation.type,
+        cable_data.insul_props.type,
         cable_data.ambient,
-        cable_data.amb_temperature
+        cable_data.T_amb
     )
     k_G = tbl_unburied_group_correction.data_value(cable_data.cable_mounting, cable_data.num_circuits)
-    k_H = _harmonics_correction(cable_data.harmonic3_content)
+    k_H = _harmonics_correction(cable_data.h3_content)
     k = k_T * k_G * k_H
-    I_b = cable_data.rated_load_current
+    I_b = cable_data.I_b
     I_b_corr = I_b / k
     I_n = get_nominal_current(I_b)
     I_n_corr = I_n / k  # refer I_n to standard conditions
-    if cable_data.install_method in cable_data._install_methods_unburied:
+    if cable_data.install_method.unburied:
         S = unburied.get_cross_sectional_area(
-            conductor_material=cable_data.conductor,
-            insulation=cable_data.insulation,
+            conductor_props=cable_data.cond_props,
+            insulation_props=cable_data.insul_props,
             num_loaded_conductors=cable_data.num_loaded_conductors,
             ref_method=cable_data.install_method,
             current=I_n_corr if based_on_I_nom else I_b_corr
         )
         I_z0 = unburied.get_ampacity(
-            conductor_material=cable_data.conductor,
-            insulation=cable_data.insulation,
+            conductor_props=cable_data.cond_props,
+            insulation_props=cable_data.insul_props,
             num_loaded_conductors=cable_data.num_loaded_conductors,
             ref_method=cable_data.install_method,
             cross_sectional_area=S
         )
-    elif cable_data.install_method in cable_data._install_methods_buried:
+    elif cable_data.install_method.buried:
         S = buried.get_cross_sectional_area(
-            conductor_material=cable_data.conductor,
-            insulation=cable_data.insulation,
+            conductor_props=cable_data.cond_props,
+            insulation_props=cable_data.insul_props,
             num_loaded_conductors=cable_data.num_loaded_conductors,
             current=I_n_corr if based_on_I_nom else I_b_corr
         )
         I_z0 = buried.get_ampacity(
-            conductor_material=cable_data.conductor,
-            insulation=cable_data.insulation,
+            conductor_props=cable_data.cond_props,
+            insulation_props=cable_data.insul_props,
             num_loaded_conductors=cable_data.num_loaded_conductors,
             cross_sectional_area=S
         )
     else:
         raise ValueError(f"Unknown installation method.")
-    I_z = k * I_z0  # current-carrying capacity at actual conditions
-
-    cable_data.sizing_factor = k
-    cable_data.cross_section_area = S
-    cable_data.current_capacity = I_z
-    cable_data.current_capacity_ref = I_z0
-    cable_data.nom_current = I_n
-    cable_data.joule_integral = _joule_integral(
-        cable_data.conductor.type,
-        cable_data.insulation.type,
-        S
-    )
+    cable_data.update(k, I_z0, S, I_n)
     return cable_data
 
 
-def set_cable_sizing(cable_data: CableSizingData, S: float) -> CableSizingData:
+def set_size(cable_data: CableData, S: float) -> CableData:
     """
-    Determines the nominal current, ampacity, and Joule-integral of the cable
-    whose conductor cross-sectional area is given.
+    Determines the nominal current, the ampacity, and the Joule-integral of the
+    cable when the cross-sectional area of the cable conductors is given.
 
     Parameters
     ----------
     cable_data:
-        Instance of `CableData` holding data about the conductor material,
-        the insulation material, and the installation of the cable.
+        Instance of `CableSizingData` holding the data about the conductor
+        material, insulation material, and the installation method of the cable.
     S:
         Cross-sectional area of the cable conductors in square millimeters.
 
     Returns
     -------
-    CableSizingData
+    CableData
     """
     k_T = _temperature_correction(
-        cable_data.insulation.type,
+        cable_data.insul_props.type,
         cable_data.ambient,
-        cable_data.amb_temperature
+        cable_data.T_amb
     )
     k_G = tbl_unburied_group_correction.data_value(cable_data.cable_mounting, cable_data.num_circuits)
-    k_H = _harmonics_correction(cable_data.harmonic3_content)
+    k_H = _harmonics_correction(cable_data.h3_content)
     k = k_T * k_G * k_H
-    I_b = cable_data.rated_load_current
+    I_b = cable_data.I_b
     I_n = get_nominal_current(I_b)
-    if cable_data.install_method in cable_data._install_methods_unburied:
+    if cable_data.install_method.unburied:
         I_z0 = unburied.get_ampacity(
-            conductor_material=cable_data.conductor,
-            insulation=cable_data.insulation,
+            conductor_props=cable_data.cond_props,
+            insulation_props=cable_data.insul_props,
             num_loaded_conductors=cable_data.num_loaded_conductors,
             ref_method=cable_data.install_method,
             cross_sectional_area=S
         )
-    elif cable_data.install_method in cable_data._install_methods_buried:
+    elif cable_data.install_method.buried:
         I_z0 = buried.get_ampacity(
-            conductor_material=cable_data.conductor,
-            insulation=cable_data.insulation,
+            conductor_props=cable_data.cond_props,
+            insulation_props=cable_data.insul_props,
             num_loaded_conductors=cable_data.num_loaded_conductors,
             cross_sectional_area=S
         )
     else:
         raise ValueError(f"Unknown installation method.")
-    I_z = k * I_z0  # current-carrying capacity at actual conditions
-
-    cable_data.sizing_factor = k
-    cable_data.cross_section_area = S
-    cable_data.current_capacity = I_z
-    cable_data.current_capacity_ref = I_z0
-    cable_data.nom_current = I_n
-    cable_data.joule_integral = _joule_integral(
-        cable_data.conductor.type,
-        cable_data.insulation.type,
-        S
-    )
+    cable_data.update(k, I_z0, S, I_n)
     return cable_data

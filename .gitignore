@@ -2,9 +2,9 @@
 __pycache__/
 *.pyc
 /docs/drawings/
-/docs/pdf/
 /docs/tryout/
 **/.ipynb_checkpoints/
 /dist/
 /src/python_electric.egg-info/
 /docs/sphinx/build/
+/docs/notes/

@@ -7,9 +7,9 @@
       <excludeFolder url="file://$MODULE_DIR$/dist" />
       <excludeFolder url="file://$MODULE_DIR$/docs/drawings" />
       <excludeFolder url="file://$MODULE_DIR$/docs/examples/sizing/.ipynb_checkpoints" />
-      <excludeFolder url="file://$MODULE_DIR$/docs/pdf" />
       <excludeFolder url="file://$MODULE_DIR$/docs/sphinx/build" />
       <excludeFolder url="file://$MODULE_DIR$/src/python_electric.egg-info" />
+      <excludeFolder url="file://$MODULE_DIR$/docs/notes" />
     </content>
     <orderEntry type="jdk" jdkName="Python 3.13 (python-electric)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />

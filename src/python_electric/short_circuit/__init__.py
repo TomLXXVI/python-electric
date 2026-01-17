@@ -1,5 +1,6 @@
 """
-Short-circuit calculation utilities.
+Short-circuit calculations: symmetrical and asymmetrical faults -
+Sequence networks.
 """
 
 from . import faults
