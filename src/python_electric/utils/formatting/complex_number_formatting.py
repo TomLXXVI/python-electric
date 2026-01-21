@@ -22,12 +22,13 @@ class PolarStringRepresentation:
         """
         Returns Pint Quantity with complex number as string in polar form.
         """
-        if isinstance(qty.magnitude, complex):
+        if isinstance(qty.magnitude, (float, complex)):
             return (
                 f"{np.abs(qty.magnitude):.{decimals}f} {qty.units:~} "
                 f"< {np.angle(qty.magnitude, deg=True):.2f}°"
             )
         if isinstance(qty.magnitude, np.ndarray):
+            # noinspection PyUnresolvedReferences
             vector_str = [
                 f"{np.abs(q.magnitude):.{decimals}f} {q.units:~} "
                 f"< {np.angle(q.magnitude, deg=True):.2f}°"
@@ -38,6 +39,7 @@ class PolarStringRepresentation:
             return f"[{vector_str[0]}, {vector_str[1]}, {vector_str[2]}]"
         raise ValueError
 
+    # noinspection PyTypeHints
     @staticmethod
     def from_complex_number(number: complex | npt.ArrayLike, decimals: int = 4) -> str:
         """

@@ -55,8 +55,8 @@ class CircuitBreaker:
         Upper limit of magnetic tripping current with regard to short-circuits.
     E_t: Quantity
         Thermal energy (I²t) let through by the circuit breaker at the
-        calculated maximum short-circuit current during the time that is
-        needed to interupt the current.
+        calculated maximum short-circuit current during the time needed to
+        interupt the current.
     """
 
     class Standard(StrEnum):
@@ -114,15 +114,14 @@ class CircuitBreaker:
             Ultimate breaking capacity of the circuit breaker.
         E_t: Quantity, optional
             Thermal energy (I²t) let through by the circuit breaker at the
-            calculated maximum short-circuit current during the time that is
-            needed to interupt the current.
+            calculated maximum short-circuit current during interruption time.
         k_m: float, optional
             Multiplication factor that determines the rated magnetic trip 
             current as a multiple of the thermal current setting if the circuit 
             breaker is of the industrial type and adjustable.
         t_m: Quantity, optional
-            Upper limit of instantaneous magnetic tripping time with regard to
-            short-circuits. By default, this time limit is set to 100 ms
+            Upper limit for the instantaneous magnetic tripping time with regard
+            to short-circuits. By default, this time limit is set to 100 ms
             according to the residential standard IEC 60898-1.
         """
         self.standard = standard
@@ -202,7 +201,7 @@ class CircuitBreaker:
                         return self.k_m * self.I_r * (1.0 - 0.2)
                     else:
                         raise AttributeError(
-                            "Parameter `K_magn_trip` cannot be None."
+                            "Parameter `k_m` cannot be None."
                         )
                 else:
                     raise AttributeError(
@@ -232,7 +231,7 @@ class CircuitBreaker:
                         return self.k_m * self.I_r * (1.0 + 0.2)
                     else:
                         raise AttributeError(
-                            "Parameter `K_magn_trip` cannot be None."
+                            "Parameter `k_m` cannot be None."
                         )
                 else:
                     raise AttributeError(
@@ -249,8 +248,8 @@ class CircuitBreaker:
         Return True if this breaker can have an intentional short-time delay.
         """
         return (
-                self.standard == CircuitBreaker.Standard.INDUSTRIAL
-                and self.category == CircuitBreaker.Category.ADJUSTABLE
+            self.standard == CircuitBreaker.Standard.INDUSTRIAL
+            and self.category == CircuitBreaker.Category.ADJUSTABLE
         )
 
     @property
@@ -279,7 +278,7 @@ class CircuitBreaker:
             pass
         else:
             warnings.warn(
-                f"I_nom {I_n.to('A'):~P.1f} is not in the range "
+                f"I_n {I_n.to('A'):~P.1f} is not in the range "
                 f"[{I_b.to('A'):~P.1f}, {I_z.to('A'):~P.1f}].",
                 category=ProtectionWarning
             )
@@ -338,7 +337,8 @@ class CircuitBreaker:
             pass
         else:
             warnings.warn(
-                "I_sc_max > ultimate breaking capacity",
+                f"I_sc_max ({I_sc_max:~P.0f}) > "
+                f"ultimate breaking capacity ({self.I_cu:~P.0f}).",
                 category=ProtectionWarning
             )
             return False
@@ -347,7 +347,8 @@ class CircuitBreaker:
             pass
         else:
             warnings.warn(
-                f"I_sc_min < minimum limit of magnetic trip current.",
+                f"I_sc_min ({I_sc_min:~P.0f} < "
+                f"minimum short-circuit tripping current ({self.I_m_min:~P.0f}).",
                 category=ProtectionWarning
             )
             return False
@@ -357,24 +358,26 @@ class CircuitBreaker:
 
             if self.E_t is not None:
                 E_through = self.E_t.to('A ** 2 * s')
+            else:
+                E_through = I_sc_max ** 2 * self.t_m.to('s')
 
-                if self.joule_integral >= E_through:
-                    pass
-                else:
-                    warnings.warn(
-                        "Let-through energy exceeds Joule-integral of the "
-                        "cable.",
-                        category=ProtectionWarning
-                    )
-                    return False
+            if self.joule_integral >= E_through:
+                pass
+            else:
+                warnings.warn(
+                    f"Let-through energy ({E_through:~P.4e}) > "
+                    f"Joule-integral of the cable ({self.joule_integral:~P.4e}).",
+                    category=ProtectionWarning
+                )
+                return False
 
             t_allow = self.joule_integral / (I_sc_min ** 2)
             if self.t_m.to('s') <= t_allow.to('s'):
                 pass
             else:
                 warnings.warn(
-                    "Magnetic interruption time exceeds the allowable fault "
-                    "duration.",
+                    f"Magnetic tripping-time limit ({self.t_m.to('s'):~P.0f}) > "
+                    f"allowable fault duration ({t_allow.to('s'):~P.0f}).",
                     category=ProtectionWarning
                 )
                 return False

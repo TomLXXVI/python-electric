@@ -15,6 +15,9 @@ class InductionMotor(Component):
     eta: Quantity
     cos_phi: float
     k_start: float = 6.0
+    R_to_X: float = 0.42
+    z2_factor: float = 1.0
+    z0_factor: float = 10.0
 
     Z_dict: dict[int, Quantity[float | complex]] = field(init=False, default_factory=dict)
 
@@ -22,12 +25,7 @@ class InductionMotor(Component):
         super().__init__(self.name)
         self.Z_dict = self.get_impedance()
 
-    def get_impedance(
-        self,
-        R_to_X: float = 0.42,
-        z2_factor: float = 1.0,
-        z0_factor: float = 10.0
-    ) -> dict[int, Quantity]:
+    def get_impedance(self) -> dict[int, Quantity]:
         from python_electric.equipment import InductionMotor
         motor = InductionMotor(
             nominal_voltage=self.U_n,
@@ -36,9 +34,9 @@ class InductionMotor(Component):
             P_m=self.P_m,
             efficiency=self.eta,
             power_factor=self.cos_phi,
-            R_to_X_ratio=R_to_X,
-            z2_factor=z2_factor,
-            z0_factor=z0_factor,
+            R_to_X_ratio=self.R_to_X,
+            z2_factor=self.z2_factor,
+            z0_factor=self.z0_factor,
             name=self.name
         )
         return {1: motor.Z1, 2: motor.Z2, 0: motor.Z0}

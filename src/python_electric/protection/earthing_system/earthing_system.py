@@ -28,6 +28,9 @@ class EarthingSystem(StrEnum):
     def is_IT(self) -> bool:
         return self.value.startswith("IT")
 
+    def is_TN_C(self) -> bool:
+        return self.value == "TN-C"
+
 
 def get_max_allow_disconnect_time(
     U_phase: Quantity,

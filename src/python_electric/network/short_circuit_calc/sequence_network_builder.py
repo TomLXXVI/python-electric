@@ -49,55 +49,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Literal, cast
 
-from python_electric import Quantity, Q_
-from python_electric.short_circuit.network.per_unit import PerUnitSystem
-from python_electric.short_circuit.network import Network as SCNetwork
-from python_electric.network.network import Network, Connection
-from python_electric.network.components import Transformer
+import logging
+
+from ... import Quantity
+from ...short_circuit.network.per_unit import PerUnitSystem
+from ...short_circuit.network import Network as SCNetwork
+from ..network import Network, Connection, Component
+from ..config import SCCalcConfig
+from ..components import Transformer
 
 Sequence = Literal[0, 1, 2]
 
 __all__ = [
     "Sequence",
-    "CalcConfig",
     "build_sequence_network",
 ]
 
-
-# ------------------------------------------------------------------------------
-# Configuration
-# ------------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class CalcConfig:
-    """Configuration for building sequence short-circuit networks."""
-
-    # Which short-circuit case we are preparing impedances for (affects
-    # IEC-like factors).
-    sc_case: str = "MAX"  # "MAX" or "MIN"
-
-    # Global base apparent power for PU conversion.
-    S_base: Quantity = Q_(100.0, "MVA")
-
-    # Voltage factors (tune to your standard/model if needed).
-    volt_factor_max: float = 1.10
-    volt_factor_min: float = 0.95
-
-    # Conductor temperatures for impedance calculation where required.
-    busbar_T_max: Quantity = Q_(20.0, "degC")
-    busbar_T_min: Quantity = Q_(150.0, "degC")
-
-    cable_T_max: Quantity = Q_(20.0, "degC")
-    cable_T_min: Quantity = Q_(150.0, "degC")
-
-    # If True: ignore induction motors in series impedance of branches
-    # (recommended default).
-    ignore_induction_motors_in_branch_Z: bool = False
-
-    # If True: add motor *source* branches ground->bus for induction motors
-    # above threshold (sequence=1 only).
-    include_induction_motor_sources: bool = False
-    induction_motor_min_Pn: Quantity = Q_(0.0, "kW")
+logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------------------
@@ -151,7 +119,7 @@ def canonicalize_branch(bs: BranchSpec) -> BranchSpec:
 # Default hooks / policies
 # ------------------------------------------------------------------------------
 
-def _sc_volt_factor(cfg: CalcConfig) -> float:
+def _sc_volt_factor(cfg: SCCalcConfig) -> float:
     """Return the voltage factor for the configured short-circuit case."""
     case = cfg.sc_case.upper().strip()
     if case == "MAX":
@@ -161,7 +129,7 @@ def _sc_volt_factor(cfg: CalcConfig) -> float:
     raise ValueError(f"sc_case must be 'MAX' or 'MIN', got {cfg.sc_case!r}")
 
 
-def default_is_source_component(comp: Any, *, sequence: Sequence, cfg: CalcConfig) -> bool:
+def default_is_source_component(comp: Any, *, sequence: Sequence, cfg: SCCalcConfig) -> bool:
     """
     Decide whether a component is treated as a short-circuit source.
 
@@ -193,7 +161,7 @@ def default_is_source_component(comp: Any, *, sequence: Sequence, cfg: CalcConfi
     return False
 
 
-def default_get_Z_ohm(comp: Any, *, sequence: Sequence, cfg: CalcConfig) -> Quantity:
+def default_get_Z_ohm(comp: Component, *, sequence: Sequence, cfg: SCCalcConfig) -> Quantity:
     """
     Extract Z(sequence) in Ohm from a component.
 
@@ -212,7 +180,7 @@ def default_get_Z_ohm(comp: Any, *, sequence: Sequence, cfg: CalcConfig) -> Quan
     T_cable = cfg.cable_T_max if case == "MAX" else cfg.cable_T_min
 
     if cls in {"Grid", "Transformer"}:
-        Z = comp.get_impedance(volt_factor=vf)
+        Z = comp.get_impedance(vf)
         return Z[sequence]
 
     if cls == "BusBar":
@@ -500,11 +468,11 @@ def build_sequence_network(
     nw: Network,
     *,
     sequence: Sequence,
-    config: CalcConfig | None = None,
+    config: SCCalcConfig | None = None,
     # hooks:
     get_Z_ohm: Callable[[Any], Quantity] | None = None,
     is_source_component: Callable[[Any], bool] | None = None,
-    bus_u_base: dict[str, Quantity] | None = None,
+    bus_u_base: dict[str, Quantity] | None = None
 ) -> SCNetwork:
     """
     Build the sequence Zbus network.
@@ -527,11 +495,6 @@ def build_sequence_network(
         Optional explicit mapping bus_id -> U_base (line-to-line).
         If None, inferred.
 
-    Returns
-    -------
-    SCNetwork
-        A short-circuit network with branches added in a valid order.
-
     Notes on sequence=0
     -------------------
     For Z0, topology depends on transformer winding connection and neutral
@@ -539,8 +502,13 @@ def build_sequence_network(
     (1)   adds all grounding (bus->ground) shunts first,
     (2)   then runs BFS to add remaining series branches where Z0 transfer
           exists.
+
+    Returns
+    -------
+    SCNetwork
+        A short-circuit network with branches added in a valid order.
     """
-    cfg = config or CalcConfig()
+    cfg = config or SCCalcConfig()
 
     # Wrap hooks so they can see cfg/sequence without changing their signature outside.
     _get_Z_ohm = get_Z_ohm or (lambda comp: default_get_Z_ohm(comp, sequence=sequence, cfg=cfg))
@@ -571,6 +539,10 @@ def build_sequence_network(
 
     def add_branchspec(bs: BranchSpec) -> None:
         """Add a branch described by BranchSpec."""
+        logger.debug(
+            f"Add branch {bs.start}->{bs.end} with Z_pu = {bs.Z_pu:.3g} "
+            f"to Z{sequence}-network.")
+
         nw_seq.add_branch(
             bs.Z_pu,
             start_node_ID=bs.start,

@@ -1,3 +1,4 @@
+# noinspection SpellCheckingInspection
 """
 Cable: sizing - impedance - voltage drop - indirect contact protection
 
@@ -17,7 +18,7 @@ from ... import Quantity, Q_, VoltReference, PhaseSystem
 from ...materials import ConductorMaterial, InsulationMaterial, INSULATION_PROPS
 from ...sizing.cable import *
 from ...protection.earthing_system import EarthingSystem, ICPResult
-from ...protection import CircuitBreaker, earthing_system, check_current_based_selectivity
+from ...protection import CircuitBreaker, earthing_system, check_current_based_selectivity, PEConductor
 from ...calc import voltage_drop
 from ...utils.charts import LineChart
 
@@ -31,8 +32,11 @@ __all__ = [
     "InstallMethod",
     "CableMounting",
     "CableArrangement",
-    "plot_cable_characteristic",
-    "check_selectivity"
+    "EarthingSystem",
+    "PhaseSystem",
+    "plot_cable",
+    "check_selectivity",
+    "SelectivityResult"
 ]
 
 
@@ -103,16 +107,18 @@ class Cable(Component):
         cross-sectional area is set to None, meaning that a valid
         cross-sectional area is to be determined on instantiation of the cable
         object.
-    S_pe: Quantity, optional
-        Cross-sectional area of the protective earth conductor. By default, this
-        cross-sectional area is set equal to the cross-sectional area of the
-        loaded cable conductors.
     earthing_system: EarthingScheme, default EarthingScheme.TN
         Indicates the earthing system of the low-voltage system. By default,
         this is set to the TN-earthing system.
     phase_system: PhaseSystem, default PhaseSystem.3PH
         Indicates whether the cable is three-phase or single phase
         (PhaseSystem.1PH).
+    z0_r_factor: float, default 3.0
+        Scaling factor applied to the positive-sequence resistance of the
+        cable to determine its zero-sequence resistance.
+    z0_x_factor: float, default 3.0
+        Scaling factor applied to the negative-sequence reactance of the
+        cable to determine its zero-sequence reactance.
 
     Attributes
     ----------
@@ -159,6 +165,10 @@ class Cable(Component):
     U_ph: Quantity
         In case of a three-phase system, the ground-to-line voltage. Otherwise,
         equal to attribute `U_l`.
+    _S_pe: Quantity, optional
+        Cross-sectional area of the protective earth conductor. By default, this
+        cross-sectional area is set equal to the cross-sectional area of the
+        loaded cable conductors.
 
     Methods
     -------
@@ -199,7 +209,7 @@ class Cable(Component):
     phase_system: PhaseSystem = PhaseSystem.PH3
 
     S: Quantity | None = None
-    S_pe: Quantity | None = None
+    _S_pe: Quantity | None = field(init=False, default=None)
 
     # Calculated attributes:
     dU: Quantity = field(init=False)
@@ -218,6 +228,8 @@ class Cable(Component):
     U_ph: Quantity = field(init=False, default=None)
 
     Z_dict: dict[str, dict[int, Quantity[float | complex]]] = field(init=False, default_factory=dict)
+    z0_r_factor: float = 3.0
+    z0_x_factor: float = 3.0
 
     def __post_init__(self):
         super().__init__(self.name)
@@ -296,9 +308,7 @@ class Cable(Component):
 
     def get_impedance(
         self,
-        T: Quantity,
-        z0_r_factor: float = 3.0,
-        z0_x_factor: float = 3.0
+        T: Quantity
     ) -> dict[int, Quantity[complex | float]]:
         """
         Returns the positive, negative, and zero-sequence impedance of the cable
@@ -308,12 +318,6 @@ class Cable(Component):
         ----------
         T: Quantity
             Temperature of the conductors.
-        z0_r_factor: float, default 3.0
-            Scaling factor applied to the positive-sequence resistance of the
-            cable to determine its zero-sequence resistance.
-        z0_x_factor: float, default 3.0
-            Scaling factor applied to the negative-sequence reactance of the
-            cable to determine its zero-sequence reactance.
 
         Returns
         -------
@@ -329,8 +333,8 @@ class Cable(Component):
             conductor_material=self.conductor_material,
             cable_arrangement=self.cable_arrangement,
             temperature=T,
-            z0_r_factor=z0_r_factor,
-            z0_x_factor=z0_x_factor,
+            z0_r_factor=self.z0_r_factor,
+            z0_x_factor=self.z0_x_factor,
             name=self.name
         )
         return {1: c.Z1, 2: c.Z2, 0: c.Z0}
@@ -356,7 +360,8 @@ class Cable(Component):
         U_l: Quantity
             Line-to-line voltage in case of a three-phase cable. Otherwise,
             in case of a single-phase cable, the neutral/ground-to-line voltage
-            (phase voltage).
+            (phase voltage). U_l is only needed to calculate the relative
+            voltage drop, not the absolute voltage drop.
         I_b: Quantity
             Load current.
         cos_phi: float
@@ -369,7 +374,7 @@ class Cable(Component):
         """
         if volt_ref is None:
             if self.phase_system.is_ph3:
-                volt_ref = VoltReference.PH3_GROUND_TO_LINE
+                volt_ref: VoltReference = VoltReference.PH3_GROUND_TO_LINE
             if self.phase_system.is_ph1:
                 volt_ref = VoltReference.PH1
 
@@ -388,12 +393,56 @@ class Cable(Component):
         standard: CircuitBreaker.Standard,
         category: CircuitBreaker.Category,
         I_cu: Quantity,
-        I_sc_max: Quantity,
-        I_sc_min: Quantity,
+        I_sc_max: Quantity | None = None,
+        I_sc_min: Quantity | None = None,
         k_m: float | None = None,
         E_t: Quantity | None = None,
         t_m: Quantity | None = None
     ) -> None:
+        """
+        Connects a circuit breaker to the cable.
+
+        Parameters
+        ----------
+        standard: CircuitBreaker.Standard
+            Either the residential standard (IEC 60898-1) or the industrial
+            standard (IEC 60947-2), which specifies the minimal performance
+            requirements of the circuit breaker. See enum
+            CircuitBreaker.Standard.
+        category: CircuitBreaker.Category
+            Specifies the category of the circuit breaker depending on its
+            magnetic trip threshold. Either category B, C, D, or AJUSTABLE. See
+            enum CircuitBreaker.Category. Note that category ADJUSTABLE also
+            demands that the circuit breaker is of the industrial type.
+        I_cu: Quantity
+            Ultimate breaking capacity of the circuit breaker.
+        I_sc_max: Quantity, optional
+            Maximum short-circuit current at the location of the circuit
+            breaker. If not specified, I_sc_max must already be assigned to
+            the cable.
+        I_sc_min: Quantity, optional
+            Minimum short-circuit current at the end of the cable. If not
+            specified, I_sc_min must already be assigned to the cable.
+        k_m: float, optional
+            Multiplication factor that determines the rated magnetic trip
+            current as a multiple of the thermal current setting if the circuit
+            breaker is of the industrial type and adjustable.
+        E_t: Quantity, optional
+            Thermal energy (I²t) let through by the circuit breaker at the
+            calculated maximum short-circuit current during the interruption
+            time.
+        t_m: Quantity, optional
+            Upper limit of instantaneous magnetic tripping time with regard to
+            short-circuits. By default, this time limit is set to 100 ms
+            according to the residential standard IEC 60898-1.
+
+        Returns
+        -------
+        None
+        """
+        I_sc_max = I_sc_max if I_sc_max is not None else self.I_sc_max
+        I_sc_min = I_sc_min if I_sc_min is not None else self.I_sc_min
+
         cb = CircuitBreaker(
             standard=standard,
             category=category,
@@ -406,10 +455,12 @@ class Cable(Component):
             k_m=k_m,
             t_m=t_m
         )
+
         c1 = cb.check_overload_protection()
         c2 = cb.check_shortcircuit_protection(I_sc_max, I_sc_min)
         if not (c1 and c2):
             raise ValueError("Circuit-breaker protection is inadequate.")
+
         self.circuit_breaker = cb
         self.I_sc_max = I_sc_max
         self.I_sc_min = I_sc_min
@@ -453,8 +504,23 @@ class Cable(Component):
             )
         return None
 
+    @property
+    def S_pe(self) -> Quantity:
+        return self._S_pe
 
-def plot_cable_characteristic(cable: Cable):
+    @S_pe.setter
+    def S_pe(self, v: Quantity) -> None:
+        if self.earthing_system.is_TN_C() and self.S.to('mm**2').m > 35.0:
+            S_pe = self.S.to('mm ** 2').m / 2
+            delta = [abs(S_pe - S_std) for S_std in PEConductor.STD_SIZES]
+            delta_min = min(delta)
+            i_min = max(i for i, v in enumerate(delta) if v == delta_min)
+            self._S_pe = Q_(PEConductor.STD_SIZES[i_min], 'mm**2')
+        else:
+            self._S_pe = v
+
+
+def plot_cable(cable: Cable) -> LineChart:
     t_min, t_max = 1e-6, 1e6
     t_5s = 5.0
     I2t = cable.I2t.to('A ** 2 * s').m
@@ -549,6 +615,9 @@ def plot_cable_characteristic(cable: Cable):
     chart.x1.scale(I_min, I_max)
     chart.y1.scale(t_min, t_max)
 
+    chart.x1.add_title("current, A")
+    chart.y1.add_title("time, s")
+
     return chart
 
 
@@ -559,10 +628,20 @@ class SelectivityResult:
     t_trip_max: Quantity | None = None
     t_margin: Quantity | None = None
 
+    def __str__(self) -> str:
+        s  = f"selectivity exists: {self.exists}\n"
+        s += f"total selectivity: {self.total}\n"
+        if self.t_trip_max is not None:
+            s += f"maximum allowable tripping-time upstream circuit breaker: "
+            s += f"{self.t_trip_max.to('ms'):~P.0f}\n"
+            s += f"available tripping-delay: "
+            s += f"{self.t_margin.to('ms'):~P.0f}"
+        return s
+
 
 def check_selectivity(
-    cable_up: Cable,
-    cable_down: Cable,
+    up: Cable,
+    down: Cable,
 ) -> SelectivityResult:
     """
     Checks the selectivity between the circuit breaker of the downstream cable
@@ -570,36 +649,35 @@ def check_selectivity(
 
     Parameters
     ----------
-    cable_up: AbstractCable
+    up: Cable
         Upstream cable with circuit breaker connected.
-    cable_down: AbstractCable
+    down: Cable
         Downstream cable with circuit breaker connected.
 
     Returns
     -------
     SelectivityResult
         exists: bool
-            Is True if current based selectivity exists between the downstream
+            True if current based selectivity exists between the downstream
             and upstream circuit breaker, i.e., if the time-current
             characteristic curve of the upstream circuit breaker is completely
             to the right of the curve of the downstream circuit breaker.
         total: bool
-            Is True if current based selectivity exists, and the calculated
+            True if current based selectivity exists and the calculated
             maximum short-circuit current in the downstream cable is smaller
             than the minimum magnetic tripping current of the upstream circuit
             breaker.
         t_trip_max: Quantity, optional
         t_margin: Quantity, optional
-            Are set when the upstream circuit breaker is of the industrial type
-            and adjustable, current based selectivity exists, but selectivity is
-            not total.
+            Are both set when the upstream circuit breaker is of the industrial
+            type and adjustable, current based selectivity exists, but the
+            selectivity is not total.
             `t_trip_max` is the maximum allowable tripping time of the upstream
             circuit breaker taking account of the Joule-integral of the upstream
             cable, and also the maximum allowable fault duration to ensure
-            protection against indirect contact (assuming a TN-earthing system).
-            `t_margin` is the margin between `t_trip_max` and `t_m_lim`, the
-            current instantaneous magnetic tripping time limit of the circuit
-            breaker.
+            protection against indirect contact (assuming a TN-earthing-system).
+            `t_margin` is the margin between `t_trip_max` and `t_m`, the
+            magnetic tripping-time limit of the circuit breaker.
 
     Notes
     -----
@@ -617,20 +695,20 @@ def check_selectivity(
           contact (default BB2 – wet skin).
       The actual setting must be chosen below or equal to this value.
     """
-    if cable_up.has_circuit_breaker and cable_down.has_circuit_breaker:
-        cb_up = cable_up.circuit_breaker
-        cb_down = cable_down.circuit_breaker
+    if up.has_circuit_breaker and down.has_circuit_breaker:
+        cb_up = up.circuit_breaker
+        cb_down = down.circuit_breaker
         res = check_current_based_selectivity(cb_down, cb_up)
         if res:
-            I_sc_max_down = cable_down.I_sc_max
+            I_sc_max_down = down.I_sc_max
             if I_sc_max_down < cb_up.I_m_min:
                 return SelectivityResult(total=True, exists=True)
             elif not cb_up.has_adjustable_delay:
                 return SelectivityResult(total=False, exists=True)
-            t_cable_max = cable_up.I2t / I_sc_max_down ** 2
-            I_sc_min_up = cable_up.I_sc_min
-            t_cable_min_up = cable_up.I2t / I_sc_min_up ** 2
-            res = cable_up.check_indirect_contact_protection(final_circuit=False)
+            t_cable_max = up.I2t / I_sc_max_down ** 2
+            I_sc_min_up = up.I_sc_min
+            t_cable_min_up = up.I2t / I_sc_min_up ** 2
+            res = up.check_indirect_contact_protection(final_circuit=False)
             t_safety_max = res.t_c_max
             t_trip_max = min(t_cable_max, t_cable_min_up, t_safety_max)
             t_margin = t_trip_max - cb_up.t_m

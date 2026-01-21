@@ -42,6 +42,12 @@ class Transformer(Component):
         Neutral-to-earth impedance of primary windings, if present.
     Zn_sec: Quantity, optional
         Neutral-to-earth impedance of secondary windings, if present.
+    z0_r_factor: float, default 3.0
+        Scaling factor applied to the positive-sequence resistance of the
+        transformer to determine its zero-sequence resistance.
+    z0_x_factor: float, default 3.0
+        Scaling factor applied to the negative-sequence reactance of the
+        transformer to determine its zero-sequence reactance.
 
     Attributes
     ----------
@@ -99,6 +105,8 @@ class Transformer(Component):
     dU_rel: Quantity = field(init=False)
 
     Z_dict: dict[int, Quantity] = field(init=False, default_factory=dict)
+    z0_r_factor: float = 1.0
+    z0_x_factor: float = 1.0
 
     def __post_init__(self):
         super().__init__(self.name)
@@ -163,11 +171,7 @@ class Transformer(Component):
         dU_rel = dU / U
         return dU, dU_rel.to('pct')
 
-    def get_impedance(
-        self,
-        volt_factor: float = 1.1,
-        z0_factor: float = 1.0
-    ) -> dict[int, Quantity]:
+    def get_impedance(self, volt_factor: float = 1.1) -> dict[int, Quantity]:
         """
         Returns the positive, negative, and zero-sequence impedance of the
         transformer.
@@ -193,7 +197,8 @@ class Transformer(Component):
             percent_short_circuit_voltage=self.u_cc,
             copper_loss=self.P_Cu,
             voltage_factor=volt_factor,
-            z0_factor=z0_factor,
+            z0_r_factor=self.z0_r_factor,
+            z0_x_factor=self.z0_x_factor,
             name=self.name
         )
         return {1: t.Z1, 2: t.Z2, 0: t.Z0}

@@ -52,10 +52,12 @@ class PerUnitSystem:
         Z_act = Z_pu * self.Z_base
         return Z_act
 
+    # noinspection PyTypeHints
     def get_actual_current(self, I_pu: float | npt.ArrayLike) -> Quantity:
         I_act = I_pu * self.I_base
         return I_act
 
+    # noinspection PyTypeHints
     def get_actual_voltage(self, U_pu: float | npt.ArrayLike) -> Quantity:
         U_act = U_pu * self.U_base
         return U_act
@@ -66,21 +68,21 @@ class PerUnitSystem:
 
 
 def convert_per_unit_impedance(
-    Z_pu: Union[float, complex],
-    from_: PerUnitSystem,
-    to_: PerUnitSystem
+    Z_pu_source: Union[float, complex],
+    source: PerUnitSystem,
+    dest: PerUnitSystem
 ) -> Union[float, complex]:
     """
     Converts a per-unit impedance to another per-unit system.
 
     Parameters
     ----------
-    Z_pu:
+    Z_pu_source:
         Per-unit impedance.
-    from_:
+    source:
         Per-unit system of `Z_pu`.
-    to_:
+    dest:
         Per-unit system the per-unit impedance `Z_pu` is to be converted to.
     """
-    Z_pu_2 = Z_pu * from_.Z_base / to_.Z_base
-    return Z_pu_2.magnitude
+    Z_pu_dest = Z_pu_source * source.Z_base / dest.Z_base
+    return Z_pu_dest.magnitude

@@ -247,11 +247,14 @@ def _harmonics_correction(harmonic3_content: float) -> float:
 
 def _joule_integral(conductor: str, insulation: str, S: float) -> float:
     """
-    Returns the "Joule integral" in A².s of a conductor, i.e., the total thermal
-    energy dissipated as heat during a short circuit, which is proportional to
-    the square of the current and the time the fault persists. It is a critical
-    value used to assess a conductor's ability to withstand the heat from a
-    fault before its insulation gets damaged.
+    Returns the "Joule integral" in A².s of the conductor. This is a measure of
+    the heat that must be generated in one meter of conductor with
+    cross-sectional area S to raise its temperature from the maximum allowable
+    continuous temperature to the maximum allowable short-term temperature.
+    This assumes no heat is transferred from the conductor to the surroundings
+    (adiabatic heating). It is a critical value used to assess a conductor's
+    ability to withstand the heat from a fault before its insulation gets
+    damaged.
 
     Parameters
     ----------

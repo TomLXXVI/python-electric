@@ -1,10 +1,13 @@
-from typing import Any
+import dataclasses
+
 from ... import Quantity
 from ...short_circuit.network import Network as SCNetwork
 from ...short_circuit.network import PerUnitSystem
 from ...short_circuit.faults import ThreePhaseFault, LineToGroundFault
 from ..network import Network
-from .sequence_network_builder import CalcConfig, build_sequence_network
+from ..config import SCCalcConfig
+from .sequence_network_builder import build_sequence_network
+
 
 __all__ = ["ShortCircuitCalc"]
 
@@ -13,19 +16,20 @@ class ShortCircuitCalc:
 
     class Max:
 
-        def __init__(self, network: Network, cfg: dict[str, Any] | None) -> None:
+        def __init__(self, network: Network, cfg: SCCalcConfig | None) -> None:
             self.nw = network
-            if cfg:
-                self.config = CalcConfig("MAX", **cfg)
+            if isinstance(cfg, SCCalcConfig):
+                self.config = dataclasses.replace(cfg, sc_case="MAX")
             else:
-                self.config = CalcConfig("MAX")
+                self.config = SCCalcConfig("MAX")
             self.nw1: SCNetwork | None = None
             self._fault_type = ThreePhaseFault
             self._fault = None
-            self._create_sequence_networks()
+
+            self._create_sequence_network()
             self._create_fault()
 
-        def _create_sequence_networks(self) -> None:
+        def _create_sequence_network(self) -> None:
             self.nw1 = build_sequence_network(
                 self.nw,
                 sequence=1,
@@ -44,16 +48,24 @@ class ShortCircuitCalc:
             bus = self.nw.busses[bus_id]
             pu_sys = PerUnitSystem(self.config.S_base, bus.U_base)
             If = pu_sys.get_actual_current(If_pu)
-            return If
+            return abs(If)
+
+        def print_seq_network(self) -> None:
+            for branch in self.nw1.branches:
+                print(branch)
+
+        def print_impedance_matrix(self):
+            self.nw1.show_impedance_matrix()
+
 
     class Min:
 
-        def __init__(self, network: Network, cfg: dict[str, Any] | None) -> None:
+        def __init__(self, network: Network, cfg: SCCalcConfig | None) -> None:
             self.nw = network
-            if cfg:
-                self.config = CalcConfig("MIN", **cfg)
+            if isinstance(cfg, SCCalcConfig):
+                self.config = dataclasses.replace(cfg, sc_case="MIN")
             else:
-                self.config = CalcConfig("MIN")
+                self.config = SCCalcConfig("MIN")
             self.nw1: SCNetwork | None = None
             self.nw2: SCNetwork | None = None
             self.nw0: SCNetwork | None = None
@@ -91,9 +103,8 @@ class ShortCircuitCalc:
             If_pu = self._fault.get_fault_current_abc()
             bus = self.nw.busses[bus_id]
             pu_sys = PerUnitSystem(self.config.S_base, bus.U_base)
-            If = pu_sys.get_actual_current(If_pu)
-            # noinspection PyUnresolvedReferences
-            return If[0]
+            If = pu_sys.get_actual_current(If_pu.flatten()[0])
+            return abs(If)
 
         def print_seq_network(self, seq: int) -> None:
             if seq == 1:
@@ -108,12 +119,23 @@ class ShortCircuitCalc:
             for branch in nw_seq.branches:
                 print(branch)
 
+        def print_impedance_matrix(self, seq):
+            if seq == 0:
+                nw = self.nw0
+            elif seq == 1:
+                nw = self.nw1
+            elif seq == 2:
+                nw = self.nw2
+            else:
+                raise ValueError(f"seq must be 0, 1, or 2. Got {seq} instead.")
+
+            nw.show_impedance_matrix()
+
 
     def __init__(
         self,
         network: Network,
-        max_cfg: dict[str, Any] | None = None,
-        min_cfg: dict[str, Any] | None = None
+        cfg: SCCalcConfig | None = None
     ) -> None:
-        self.max = ShortCircuitCalc.Max(network, max_cfg)
-        self.min = ShortCircuitCalc.Min(network, min_cfg)
+        self.max = ShortCircuitCalc.Max(network, cfg)
+        self.min = ShortCircuitCalc.Min(network, cfg)

@@ -118,9 +118,11 @@ class RodEarthElectrode(EarthElectrode):
 
 @dataclass
 class PEConductor:
+    STD_SIZES = [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120, 150, 185, 240, 300]  # mm²
+
     conductor_material: ConductorMaterial
     insulation_material: InsulationMaterial
-    seperate: bool
+    seperated: bool
 
     k: float = field(init=False, default=0.0)
     S: Quantity = field(init=False, default=None)
@@ -131,7 +133,7 @@ class PEConductor:
         else:
             self._insulation_material = self.insulation_material
 
-        if self.seperate:
+        if self.seperated:
             self.k = tbl_k_factor_1.data_value(
                 self.conductor_material,
                 self._insulation_material
@@ -146,19 +148,18 @@ class PEConductor:
         self,
         I_f: Quantity,
         t_u: Quantity,
-        protected: bool = True
+        mech_protected: bool = True
     ) -> Quantity:
-        std_sizes = [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120, 150, 185, 240, 300]
         I_f = I_f.to('A').m
         t_u = t_u.to('s').m
         if t_u > 5.0:
             raise ValueError("Maximum interruption time is 5 s.")
         S = I_f * math.sqrt(t_u) / self.k
-        delta_S = [abs(S - S_std) for S_std in std_sizes]
+        delta_S = [abs(S - S_std) for S_std in self.STD_SIZES]
         delta_S_min = min(delta_S)
         i_min = delta_S.index(delta_S_min)
-        S = std_sizes[i_min]
-        if protected:
+        S = self.STD_SIZES[i_min]
+        if mech_protected:
             S = max(S, 2.5)
         else:
             S = max(S, 4.0)
@@ -172,10 +173,10 @@ class EarthConductor(PEConductor):
         self,
         I_f: Quantity,
         t_u: Quantity,
-        protected: bool = True
+        mech_protected: bool = True
     ) -> Quantity:
         S = super().cross_section_area(I_f, t_u, False)
-        if protected:
+        if mech_protected:
             S = max(S.m, 16.0)
         elif self.conductor_material == ConductorMaterial.COPPER:
             S = max(S.m, 25.0)

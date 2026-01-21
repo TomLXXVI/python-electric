@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
+from typing import Type, TypeVar
 
 from python_electric import Quantity
 
-__all__ = ["Bus", "Connection", "Component", "Network"]
+__all__ = ["Bus", "Connection", "Component", "Network", "TComponent"]
 
 
 @dataclass(slots=True)
@@ -50,6 +51,7 @@ class Connection:
 class Component(ABC):
     """
     Base class for physical/electrical assets placed on a Connection.
+    @DynamicAttrs
     """
     def __init__(self, name: str = "") -> None:
         self.name: str = name
@@ -61,6 +63,10 @@ class Component(ABC):
     @abstractmethod
     def get_impedance(self, *args, **kwargs):
         ...
+
+
+TComponent = TypeVar("TComponent", bound=Component)
+
 
 class Network:
     """
@@ -130,6 +136,33 @@ class Network:
 
     def get_component(self, conn_id: str, comp_id: str) -> Component:
         return self.get_connection(conn_id).get_component(comp_id)
+
+    def find_components(
+        self,
+        comp_type: Type[TComponent],
+        *,
+        include_subclasses: bool = True,
+    ) -> list[tuple[TComponent, str, str, str]]:
+        """
+        Find all components of a given type in the network.
+
+        Returns
+        -------
+        list of tuples:
+            (component, connection_id, start_id, end_id)
+        """
+        matches: list[tuple[TComponent, str, str, str]] = []
+
+        for conn_id, conn in self._connections.items():
+            start_id = conn.start.name
+            end_id = conn.end.name
+
+            for comp in conn.components.values():
+                ok = isinstance(comp, comp_type) if include_subclasses else (type(comp) is comp_type)
+                if ok:
+                    matches.append((comp, conn_id, start_id, end_id))
+
+        return matches
 
     @property
     def ground(self) -> Bus:

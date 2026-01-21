@@ -111,7 +111,8 @@ class Transformer(Equipment):
         percent_short_circuit_voltage: Quantity,
         copper_loss: Optional[Quantity] = None,
         voltage_factor: float = 1.0,
-        z0_factor: float = 1.0,
+        z0_r_factor: float = 1.0,
+        z0_x_factor: float = 1.0,
         name: str = "transformer"
     ) -> None:
         super().__init__(name)
@@ -121,7 +122,8 @@ class Transformer(Equipment):
         self.P_Cu = copper_loss
         self.c = voltage_factor
         # Zero-sequence scaling factor
-        self.z0_factor = z0_factor
+        self.z0_r_factor = z0_r_factor
+        self.z0_x_factor = z0_x_factor
 
     @property
     def Z1(self) -> Quantity:
@@ -179,7 +181,10 @@ class Transformer(Equipment):
             vector group and neutral earthing should be used.
         """
         z1 = self.Z1.to('ohm').magnitude
-        return Quantity(self.z0_factor * z1, 'ohm')
+        r1, x1 = z1.real, z1.imag
+        r0 = self.z0_r_factor * r1
+        x0 = self.z0_x_factor * x1
+        return Quantity(complex(r0, x0), 'ohm')
 
 
 class Generator(Equipment):
@@ -393,7 +398,7 @@ class InductionMotor(Equipment):
         self.R_to_X_ratio = R_to_X_ratio
         # Scaling factor for the negative-sequence impedance
         self.z2_factor = z2_factor
-        # Zero-sequence scaling factor (large ⇒ negligible contribution)
+        # Zero-sequence scaling factor (large -> negligible contribution)
         self.z0_factor = z0_factor
 
     @property
