@@ -1,4 +1,4 @@
-import typing
+from typing import Iterator, Sequence
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
 from enum import StrEnum
@@ -6,7 +6,13 @@ import warnings
 
 from .. import Quantity, Q_
 from ..utils.charts import LineChart
-from ..protection import PEConductor, CircuitBreaker
+from ..protection import (
+    PEConductor,
+    CircuitBreaker,
+    CircuitBreakerAdvisor,
+    CircuitBreakerSuggestion
+)
+from ..protection.earthing_system import IndirectContactProtResult
 from .config import SCCalcConfig, PEConductorConfig
 from .network import Network, Connection, Component, TComponent
 from .short_circuit_calc import ShortCircuitCalc
@@ -42,6 +48,10 @@ __all__ = [
     "TransformerInput",
     "LoadInput"
 ]
+
+
+class CircuitBreakerAdvisorWarning(Warning):
+    pass
 
 
 class ComponentInput(ABC):
@@ -104,7 +114,7 @@ class CableInput(ComponentInput):
     num_circuits: int = 1
     h3_fraction: float = 0.0
     sizing_based_on_I_nom: bool = False
-    earthing_system: EarthingSystem = EarthingSystem.TN
+    earthing_system: EarthingSystem | None = None
     phase_system: PhaseSystem = PhaseSystem.PH3
     z0_r_factor: float = 3.0
     z0_x_factor: float = 3.0
@@ -274,7 +284,12 @@ class NetworkTopology:
         name: str,
         U_lv: Quantity,
         sc_config: SCCalcConfig | None = None,
-        pe_config: PEConductorConfig | None = None
+        pe_config: PEConductorConfig | None = None,
+        earthing_system: EarthingSystem = EarthingSystem.TN,
+        cb_standard: CircuitBreaker.Standard = CircuitBreaker.Standard.INDUSTRIAL,
+        skin_condition: str = "BB2",
+        neutral_distributed: bool = True,
+        R_e_consumer: Quantity | None = None
     ) -> None:
         """
         Initializes a `NetworkTopology` object.
@@ -292,14 +307,30 @@ class NetworkTopology:
         pe_config: PEConductorConfig, optional
             Global configuration settings for sizing PE-conductors. If None, the
             default configuration is used (see python_electric/protection/earthing.py).
+        cb_standard: CircuitBreaker.Standard, default CircuitBreaker.Standard.INDUSTRIAL
+            IEC-standard to which the circuit breakers in the LV-network apply.
+        skin_condition: str, {"BB1", "BB2" (default)}
+            Code that identifies the condition of the human skin: either dry
+            (BB1) or wet (BB2).
+        neutral_distributed: bool, default True
+            Indicates whether the neutral conductor is also distributed in the
+            network or not. Only used in an IT-earthing system.
+        R_e_consumer: Quantity, optional
+            Spreading resistance of the consumer earthing installation. Only
+            used in an IT-earthing system.
         """
         self.name = name
         self.U_lv = U_lv
+        self.earthing_system = earthing_system
+        self.cb_standard = cb_standard
+        self.skin_condition = skin_condition
+        self.neutral_distributed = neutral_distributed
+        self.R_e_consumer = R_e_consumer
 
         self._network = Network(name)
 
-        # Register of all the components in the network
-        self._comp_register: dict[str, str] = {}  # component.name, conn_id
+        # Register with all the component names in the network
+        self._comp_register: dict[str, str] = {}  # component.name -> conn_id
 
         # Configuration settings for the min/max short-circuit calculation
         self._sc_glob_config = sc_config
@@ -311,9 +342,8 @@ class NetworkTopology:
             self._pe_conductor_glob_cfg = pe_config
 
         self._loads: dict[str, LoadInput | None] = {}  # loads are associated with connections -> see add_connection()
-
         self._sc_calc: ShortCircuitCalc | None = None
-        self._sc_dict: dict[str, NetworkTopology.ShortCircuitResult] = {}  # bus_id, min/max short-circuit current
+        self._sc_dict: dict[str, NetworkTopology.ShortCircuitResult] = {}  # bus_id -> min/max short-circuit current
 
     def add_connection(
         self,
@@ -374,6 +404,9 @@ class NetworkTopology:
 
         comp = None
         if isinstance(comp_data, (BusBarInput, CableInput)):
+            if isinstance(comp_data, CableInput):
+                if comp_data.earthing_system is None:
+                    comp_data.earthing_system = self.earthing_system
             comp = comp_data.create_component(Load(**load_data.to_dict()))
         if isinstance(comp_data, GridInput):
             comp = comp_data.create_component()
@@ -425,7 +458,7 @@ class NetworkTopology:
         conn = self._network.get_connection(conn_id)
         return cable, conn
 
-    def iter_cables(self) -> typing.Iterator[Cable]:
+    def iter_all_cables(self) -> Iterator[Cable]:
         """
         Returns an iterator over the cables in the network.
         """
@@ -548,52 +581,32 @@ class NetworkTopology:
 
         return self._sc_dict
 
-    def size_pe_conductor(
+    def suggest_circuit_breaker(
         self,
         cable_id: str,
-        pe_conductor_cfg: PEConductorConfig | None = None
-    ) -> Quantity:
-        """
-        Sizes the single PE-conductor that belongs to the specified cable.
+        *,
+        safety_factor_Icu: float = 1.0,
+        icu_series: Sequence[Quantity | float] | None = None,
+        km_grid: Sequence[float] | None = None,
+        prefer_adjustable: bool = False,
+    ) -> CircuitBreakerSuggestion:
+        cable, _ = self.get_cable(cable_id)
 
-        Parameters
-        ----------
-        cable_id: str
-            Identifies the cable in the network.
-        pe_conductor_cfg: PEConductorConfig, optional
-            Configuration settings to size the PE-conductor. Overrides the
-            global configuration settings assigned to the network.
-
-        Returns
-        -------
-        Quantity
-            Calculated cross-sectional area of the PE-conductor.
-
-        Notes
-        -----
-        Internally the cross-sectional area of the PE-conductor is also set on
-        the Cable instance. If the PE-conductor is also the neutral conductor
-        (TN-C), it may be that the calculated cross-sectional is overwritten due
-        to other requirements that apply to PEN-conductors.
-        """
-        pe_conductor_cfg = self._pe_conductor_glob_cfg if pe_conductor_cfg is None else pe_conductor_cfg
-
-        # Get minimum short-circuit current
-        cable, conn = self.get_cable(cable_id)
-        I_sc_min = self.get_short_circuit_current(conn.end.name, self.ShortCircuitCase.MIN)
-
-        pe_conductor = PEConductor(
-            pe_conductor_cfg.cond_mat,
-            pe_conductor_cfg.insul_mat,
-            pe_conductor_cfg.separated
+        advisor = CircuitBreakerAdvisor(
+            cable=cable,
+            standard=self.cb_standard,
+            safety_factor_Icu=safety_factor_Icu,
+            icu_series=icu_series,
+            km_grid=km_grid,
+            prefer_adjustable=prefer_adjustable
         )
-        S_pe = pe_conductor.cross_section_area(
-            I_sc_min,
-            pe_conductor_cfg.t_u,
-            pe_conductor_cfg.mech_protected
-        )
-        cable.S_pe = S_pe
-        return S_pe
+
+        best = advisor.suggest(top=1)
+        if not best:
+            all_results = advisor.suggest_all()
+            return all_results[0]
+        else:
+            return best[0]
 
     def connect_circuit_breaker(
         self,
@@ -674,6 +687,56 @@ class NetworkTopology:
         res = check_selectivity(cable_up, cable_down)
         return res
 
+    def size_pe_conductor(
+        self,
+        cable_id: str,
+        pe_conductor_cfg: PEConductorConfig | None = None
+    ) -> Quantity:
+        """
+        Sizes the single PE-conductor that belongs to the specified cable.
+
+        Parameters
+        ----------
+        cable_id: str
+            Identifies the cable in the network.
+        pe_conductor_cfg: PEConductorConfig, optional
+            Configuration settings to size the PE-conductor. Overrides the
+            global configuration settings assigned to the network.
+
+        Returns
+        -------
+        Quantity
+            Calculated cross-sectional area of the PE-conductor.
+
+        Notes
+        -----
+        Internally the cross-sectional area of the PE-conductor is also set on
+        the Cable instance. If the PE-conductor is also the neutral conductor
+        (TN-C), it may be that the calculated cross-sectional is overwritten due
+        to other requirements that apply to PEN-conductors.
+        """
+        pe_conductor_cfg = self._pe_conductor_glob_cfg if pe_conductor_cfg is None else pe_conductor_cfg
+
+        # Get minimum short-circuit current
+        cable, conn = self.get_cable(cable_id)
+        I_sc_min = self.get_short_circuit_current(conn.end.name, self.ShortCircuitCase.MIN)
+
+        pe_conductor = PEConductor(
+            conductor_material=pe_conductor_cfg.cond_mat,
+            insulation_material=pe_conductor_cfg.insul_mat,
+            seperated=pe_conductor_cfg.separated
+        )
+        S_pe = pe_conductor.cross_section_area(
+            I_f=I_sc_min,
+            t_u=pe_conductor_cfg.t_interrupt,
+            mech_protected=pe_conductor_cfg.mech_protected
+        )
+        if not pe_conductor.seperated and S_pe < cable.S:
+            cable.S_pe = cable.S
+        else:
+            cable.S_pe = S_pe
+        return S_pe
+
     def size_all_pe_conductors(self):
         """
         Sizes the PE-conductor of all cables in the network using the global
@@ -689,7 +752,6 @@ class NetworkTopology:
             self.run_short_circuit_calculation()
 
         cables = self._network.find_components(Cable)
-
         for cable, *_, end_id in cables:
             pe_conductor = PEConductor(
                 self._pe_conductor_glob_cfg.cond_mat,
@@ -698,10 +760,13 @@ class NetworkTopology:
             )
             S_pe = pe_conductor.cross_section_area(
                 cable.I_sc_min,
-                self._pe_conductor_glob_cfg.t_u,
+                self._pe_conductor_glob_cfg.t_interrupt,
                 self._pe_conductor_glob_cfg.mech_protected
             )
-            cable.S_pe = S_pe
+            if not pe_conductor.seperated and S_pe < cable.S:
+                cable.S_pe = cable.S
+            else:
+                cable.S_pe = S_pe
 
     # def add_circuit_breakers(self):
     #     """
@@ -722,7 +787,11 @@ class NetworkTopology:
     #         cable = typing.cast(Cable, cable)
     #         cable.connect_circuit_breaker()
 
-    def get_voltage_drop(self, conn_id: str) -> tuple[Quantity, Quantity]:
+    def get_voltage_drop_of_conn(self, conn_id: str) -> tuple[Quantity, Quantity]:
+        """
+        Returns the absolute and relative voltage drop across the specified
+        connection.
+        """
         conn = self._network.get_connection(conn_id)
         dU = Q_(0.0, 'V')
         dU_rel = Q_(0.0, 'pct')
@@ -734,3 +803,186 @@ class NetworkTopology:
             dU += comp.dU
             dU_rel += comp.dU_rel
         return dU, dU_rel
+
+    def get_voltage_drop_at_bus(
+        self,
+        bus_id: str,
+        *,
+        start_bus_id: str | None = None,
+    ) -> tuple[Quantity, Quantity]:
+        """
+        Return the cumulative voltage drop (absolute and relative) from a start
+        bus to a target bus.
+
+        If `start_bus_id` is None, the method tries to infer the source bus as
+        follows:
+        -   Find all connections that start from `ground`.
+        -   If exactly one such connection exists, the inferred start bus is the
+            end bus of that connection (i.e. the first energized bus downstream
+            of ground).
+        -   Otherwise, the caller must provide `start_bus_id`.
+
+        Parameters
+        ----------
+        bus_id:
+            Target bus ID where the cumulative voltage drop is requested.
+        start_bus_id:
+            Start bus ID. If None, the method attempts to infer the source bus
+            of the network to be used as the start bus.
+
+        Returns
+        -------
+        (dU, dU_rel):
+            Absolute voltage drop in volts and relative voltage drop in percent.
+
+        Raises
+        ------
+        KeyError:
+            If the bus does not exist.
+        ValueError:
+            If no directed path exists, or if `start_bus_id` cannot be inferred.
+        """
+        # Validate target bus exists (Network will also check, but this gives a
+        # clearer error here)
+        if bus_id not in self._network.busses:
+            raise KeyError(f"Bus '{bus_id}' not found.")
+
+        # Infer start bus if not provided
+        if start_bus_id is None:
+            start_bus_ids = self._network.get_source_bus_ids()
+            if len(start_bus_ids) != 1:
+                raise ValueError(
+                    "Cannot infer start_bus_id automatically: "
+                    f"found {len(start_bus_ids)} connection(s) starting "
+                    f"from '{self.GROUND_ID}'. "
+                    f"Please provide start_bus_id explicitly."
+                )
+            start_bus_id = start_bus_ids[0]
+
+        # Path as ordered list of connection IDs from start_bus_id -> bus_id
+        conn_path = self._network.find_connection_path(start_bus_id, bus_id)
+
+        # Sum voltage drops over the connections on the path
+        dU = Q_(0.0, "V")
+        dU_rel = Q_(0.0, "pct")
+        for conn_id in conn_path:
+            dU_i, dU_rel_i = self.get_voltage_drop_of_conn(conn_id)
+            dU += dU_i
+            dU_rel += dU_rel_i
+
+        return dU, dU_rel
+
+    def check_indirect_contact_protection(
+        self,
+        cable_id: str,
+        *,
+        skin_condition: str = "BB2",
+        final_circuit: bool = True,
+        neutral_distributed: bool = True,
+        R_e: Quantity | None = None
+    ) -> IndirectContactProtResult:
+        """
+        Checks whether the specified cable is protected against indirect
+        contact.
+
+        Parameters
+        ----------
+        cable_id: str
+            Identifies the cable in the network.
+        skin_condition: str, {"BB1", "BB2" (default)}
+            Code that identifies the condition of the human skin: either dry
+            (BB1) or wet (BB2).
+        final_circuit: bool, default True
+            Indicates that the cable is feeding an electrical consumer of which
+            the nominal current does not exceed 32 A.
+        neutral_distributed: bool, default True
+            Only used with IT-earthing. Indicates whether the neutral conductor
+            is also distributed in the network or not.
+        R_e: Quantity, optional
+            Only used with IT-earthing. Indicates the spreading resistance of
+            the earth electrodes in the consumer installation. Must be set when
+            two exposed conductive parts in the fault loop are both connected to
+            a different, separate earth electrode. It is assumed that all earth
+            electrodes in the consumer installation exhibit the same spreading
+            resistance.
+
+        Returns
+        -------
+        IndirectContactProtResult
+        """
+        cable, _ = self.get_cable(cable_id)
+        res = cable.check_indirect_contact_protection(
+            S_pe=cable.S_pe,
+            skin_condition=skin_condition,
+            final_circuit=final_circuit,
+            neutral_distributed=neutral_distributed,
+            R_e=R_e
+        )
+        return res
+
+    def check_final_circuits(
+        self,
+        source_bus_id: str | None = None
+    ) -> dict[str, IndirectContactProtResult]:
+        """
+        Checks the protection against indirect contact of all the final
+        circuits in the network.
+
+        Parameters
+        ----------
+        source_bus_id: str, optional
+            ID of the network source bus. If None, a source bus is searched for.
+
+        Returns
+        -------
+        dict[str, IndirectContactProtResult]
+
+        Raises
+        ------
+        ValueError
+            If a network source bus cannot be found.
+        """
+        if source_bus_id is None:
+            # Get a source bus ID (it doesn't matter which one, should there be
+            # several ones)
+            source_bus_ids = self._network.get_source_bus_ids()
+            if not source_bus_ids:
+                raise ValueError(
+                    "Cannot find a network source bus."
+                    "Please provide source_bus_id explicitly."
+                )
+            source_bus_id = source_bus_ids[0]
+
+        # Get final circuits
+        final_bus_ids = [
+            final_bus.name for final_bus in
+            self._network.find_reachable_final_busses(source_bus_id)
+        ]
+        final_conn_ids = [
+            self._network.find_connection_path(source_bus_id, bus_id)[-1]
+            for bus_id in final_bus_ids
+        ]
+        final_circuits = [
+            self._network.get_connection(conn_id)
+            for conn_id in final_conn_ids
+        ]
+
+        # Get cables from final circuits
+        cables = [
+            component
+            for final_circuit in final_circuits
+            for component in final_circuit.components.values()
+            if isinstance(component, Cable)
+        ]
+
+        results = {
+            cable.name: self.check_indirect_contact_protection(
+                cable.name,
+                skin_condition=self.skin_condition,
+                final_circuit=True,
+                neutral_distributed=self.neutral_distributed,
+                R_e=self.R_e_consumer
+            )
+            for cable in cables
+        }
+        return results

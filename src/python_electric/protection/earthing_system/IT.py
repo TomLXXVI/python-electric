@@ -5,7 +5,7 @@ from ... import calc
 from ...materials import ConductorMaterial
 from ..safety_curve import SafetyCurve
 from .earthing_system import (
-    ICPResult,
+    IndirectContactProtResult,
     get_max_allow_disconnect_time,
     EarthingSystem
 )
@@ -24,10 +24,9 @@ PI = math.pi
 
 class ITSingleFault:
     """
-    Implements the calculation of the fault current and fault voltage in a
-    low-voltage, IT-earthed distribution network due to a single line-to-ground
-    fault with an exposed conductive part. The fault loop is closed through
-    parasitic capacitances of the network cabling.
+    Calculation of the fault current and fault voltage in an IT-earthed network
+    due to a single line-to-ground fault via an exposed conductive part. The
+    fault loop is closed by parasitic capacitances of the network cabling.
     """
     def __init__(
         self,
@@ -52,10 +51,9 @@ class ITSingleFault:
             Earthing impedance of the low-voltage, IT-earthed distribution
             network.
         R_e: Quantity
-            Separate earthing resistance of the exposed conductive parts in
-            the installation (including the total resistance of the
-            PE-conductors between the earthing main terminal and the exposed
-            conductive part that is part of the fault loop).
+            Earth-spreading resistance of the consumer installation, including
+            the resistance of the PE-conductors between the earthing main
+            terminal and the exposed conductive part in the fault loop.
         L_tot:
             Approximate total cable length of the low-voltage network in the
             building.
@@ -100,7 +98,7 @@ class ITSingleFault:
     def I_fault(self) -> Quantity:
         """
         Returns the fault current due to a single line-to-ground fault through
-        an exposed conductive part somewhere in the installation.
+        any exposed conductive part in the network.
 
         Returns
         -------
@@ -114,9 +112,9 @@ class ITSingleFault:
     @property
     def U_fault(self) -> Quantity:
         """
-        Returns the voltage (touch potential rise) between ground (0 V) and the
-        exposed conductive part, due to the earthing resistance `R_e` of the
-        installation.
+        Returns the fault voltage (i.e. the touch potential rise) between ground
+        (0 V) and the exposed conductive part due to the earthing resistance
+        `R_e` of the consumer installation.
 
         Returns
         -------
@@ -129,14 +127,13 @@ class ITSingleFault:
 
 class ITDoubleFault:
     """
-    Implements the calculation of the fault current and voltage in a low-voltage
-    IT-earthed distribution network in case of a fault loop wherein two
-    line-to-ground faults exist.
+    Calculation of the fault current and fault voltage in an IT-earthed network
+    where a fault loop arises due to two separate line-to-ground faults in the
+    network.
 
-    Notes
-    -----
-    To analyze a double line-to-ground fault, it is assumed that for any circuit
-    in the network an identical circuit is present.
+    To analyze the double line-to-ground fault in an IT network, it is assumed
+    that for each circuit in the network, an identical circuit is present in the
+    same network.
     """
     def __init__(
         self,
@@ -156,24 +153,23 @@ class ITDoubleFault:
         U_phase: Quantity
             Line-to-ground (phase) system voltage.
         L: Quantity.
-            Cable length measured from the electrical distribution board to the
-            electrical appliance with the exposed conductive part.
+            Cable length between the electrical distribution board and the
+            exposed conductive part.
         S_phase: Quantity
             Cross-sectional area of the phase conductors.
         S_pe: Quantity
             Cross-sectional area of PE-conductor.
         conductor_material: ConductorMaterial
-            Material the cable conductors are made of. See enum
-            ConductorMaterials in /materials.
+            See enum ConductorMaterials in materials.
         neutral_distributed: bool, default True
-            Indicates whether the neutral conductor is also distributed in the
-            network or not.
+            Indicates whether the neutral conductor is distributed in the
+            network.
         R_e: Quantity | None
-            Spreading resistance of the earth electrodes if the two exposed
-            conductive parts that are part of the fault loop are both connected
-            to different, separate earth electrodes. It is assumend that all
-            earth electrodes in the installation have the same spreading
-            resistance.
+            Earth-spreading resistance of an individual earth electrode in the
+            consumer installation. Must be set when the two exposed conductive
+            parts in the fault loop are connected to different, separate earth
+            electrodes. It is assumed that all earth electrodes in the consumer
+            installation have the same earth-spreading resistance.
         """
         if not neutral_distributed:
             U = math.sqrt(3) * U_phase
@@ -214,8 +210,8 @@ class ITDoubleFault:
     @property
     def U_fault(self) -> Quantity:
         """
-        Returns the voltage (touch potential rise) between ground (0 V) and the
-        faulted exposed conductive part in the circuit.
+        Returns the fault voltage (i.e. the touch potential rise) between ground
+        (0 V) and the faulted exposed conductive part.
 
         Returns
         -------
@@ -228,10 +224,9 @@ class ITDoubleFault:
 
     def L_max(self, I_m_cb: Quantity) -> Quantity:
         """
-        Returns the maximum length of the cable calculated so that the circuit
-        breaker with magnetic tripping current `I_m_cb` is still able to clear
-        the line-to-ground fault current in "short-circuit" time (i.e. the
-        magnetic tripping time upper limit, `t_m_lim`).
+        Returns the maximum allowable length of the cable, so that the circuit
+        breaker with short-circuit tripping current `I_m_cb` is just able to
+        clear fault current in "short-circuit" time.
         """
         I_m_cb = I_m_cb.to('A').m
         rho = self._TN_fault.rho
@@ -247,17 +242,17 @@ class ITDoubleFault:
 
 class ITExtraneousConductivePartFault:
     """
-    Implements the calculation of the fault current and fault voltage due to
-    a double line-to-ground fault in a low-voltage, IT-earthed distribution
-    network where one of the two faults exists between a phase conductor and an
-    extraneous conductive part. The fault current flows through earth towards
-    the earthing resistance of the installation.
+    Calculation of the fault current and fault voltage due to two separate
+    line-to-ground faults in an IT-earthed network. One of the two
+    faults occurs between a phase conductor and an extraneous conductive part.
+    The fault current passes through earth and through the earthing resistance
+    of the consumer installation.
     """
     def __init__(
         self,
         U_phase: Quantity,
-        R_b: Quantity,
-        R_e: Quantity = Q_(5, 'ohm'),
+        R_e: Quantity,
+        R_e_extr: Quantity = Q_(5, 'ohm'),
         skin_condition: str = "BB2",
         neutral_distributed: bool = True
     ) -> None:
@@ -268,17 +263,17 @@ class ITExtraneousConductivePartFault:
         ----------
         U_phase: Quantity
             Line-to-ground (phase) system voltage.
-        R_b: Quantity
-            Measured earth spreading resistance of the installation.
         R_e: Quantity
+            Earth-spreading resistance of the consumer installation.
+        R_e_extr: Quantity
             Contact resistance of any extraneous conductive part to earth.
-            By default, it is set to 5 ohm (according to AREI art. 80.03).
+            By default, set to 5 ohm (according to AREI art. 80.03).
         skin_condition: str, {"BB1", "BB2" (default)}
-            Code that identifies the condition of the human skin: either dry
-            (BB1) or wet (BB2).
+            Code that identifies the human skin condition: either dry (BB1) or
+            wet (BB2).
         neutral_distributed: bool, default True
-            Indicates whether the neutral conductor is also distributed in the
-            network or not.
+            Indicates whether the neutral conductor is distributed in the
+            network.
         """
         if not neutral_distributed:
             U = math.sqrt(3) * U_phase
@@ -286,8 +281,8 @@ class ITExtraneousConductivePartFault:
             U = U_phase
         self._TN_fault = TN.LineToExtraneousConductivePartFault(
             U_phase=U,
-            R_b=R_b,
             R_e=R_e,
+            R_e_extr=R_e_extr,
             skin_condition=skin_condition
         )
 
@@ -300,12 +295,12 @@ class ITExtraneousConductivePartFault:
         return self._TN_fault.U_fault
 
     @property
-    def R_b_max(self) -> Quantity:
-        return self._TN_fault.R_b_max
+    def R_e_max(self) -> Quantity:
+        return self._TN_fault.R_e_max
 
     @property
-    def t_c_max(self) -> Quantity:
-        return self._TN_fault.t_c_max
+    def t_contact_max(self) -> Quantity:
+        return self._TN_fault.t_contact_max
 
 
 def check_indirect_contact(
@@ -319,13 +314,13 @@ def check_indirect_contact(
     final_circuit: bool = True,
     neutral_distributed: bool = True,
     R_e: Quantity | None = None
-) -> ICPResult:
+) -> IndirectContactProtResult:
     """
-    Determines the requirements so that the circuit breaker of a circuit would
-    also protect against indirect contact in a low-voltage distribution network
-    with IT-earthing system where, by assumption, a second insulation fault
-    through an exposed conductive part occurs in circuit which is identical to
-    the circuit under investigation.
+    Determines the requirements so that a circuit breaker would also protect
+    against indirect contact in a low-voltage network with IT-earthing system in
+    case two insulation faults occur in the network. It is assumed that the
+    second insulation fault via an exposed conductive part occurs in a circuit
+    being identical to the circuit under investigation.
 
     Parameters
     ----------
@@ -359,36 +354,15 @@ def check_indirect_contact(
         Indicates whether the neutral conductor is also distributed in the
         network or not.
     R_e: Quantity | None
-        Spreading resistance of the earth electrodes if the two exposed
-        conductive parts that are part of the fault loop are both connected
-        to different, separate earth electrodes. It is assumend that all
-        earth electrodes in the installation have the same spreading
-        resistance.
+        Earth-spreading resistance of the earth electrodes in the consumer
+        installation. Must be set when two exposed conductive parts in the
+        fault loop may be connected to different, separate earthelectrodes. It
+        is assumed that all earth electrodes in the consumer installation have
+        the same earth-spreading resistance.
 
     Returns
     -------
-    ICPResult
-        I_f: Quantity | None
-            Fault current.
-        U_f: Quantity | None
-            Voltage (touch potential rise) between earth (0 V) and an
-            exposed conductive part of the low-voltage distribution network.
-        L_max: Quantity | None
-            Maximum allowable length of the cable between the distribution
-            board and the appliance/sub-distribution board, so that the
-            minimum short-circuit current calculated at the end of the cable
-            would equal the maximum limit of the magnetic trip current of
-            the circuit breaker.
-        t_c_max: Quantity | None
-            Maximum allowable contact duration with touch voltage according
-            to the applicable safety curve.
-        R_pe_max: Quantity | None
-            Maximum allowable resistance of the PE-conductor between the
-            main earthing terminal and the most distant exposed conductive
-            part in the distribution network, so that the fault current
-            would equal the maximum limit of the magnetic trip current of
-            the circuit breaker just upstream of the most distant exposed
-            conductive part.
+    IndirectContactProtResult
     """
     fault = ITDoubleFault(
         U_phase=U_phase,
@@ -413,23 +387,23 @@ def check_indirect_contact(
     if final_circuit:
         t_c_max_iec = get_max_allow_disconnect_time(U_phase, EarthingSystem.TN)
         t_c_max = min(t_c_max.to('ms'), t_c_max_iec.to('ms'))
-    return ICPResult(
+    return IndirectContactProtResult(
         I_f=fault.I_fault,
         U_f=fault.U_fault,
         L_max=L_max,
-        t_c_max=t_c_max,
+        t_contact_max=t_c_max,
         R_pe_max=R_pe_max
     )
 
 
 def check_earthing_resistance(
     U_phase: Quantity,
-    R_b: Quantity,
-    R_e: Quantity = Q_(5, 'ohm'),
+    R_e: Quantity,
+    R_e_extr: Quantity = Q_(5, 'ohm'),
     skin_condition: str = "BB2",
     final_circuit: bool = True,
     neutral_distributed: bool = True
-) -> Quantity:
+) -> IndirectContactProtResult:
     """
     Determines the requirements regarding the earthing resistance of the
     consumer installation by considering a second insulation fault via an
@@ -440,46 +414,38 @@ def check_earthing_resistance(
     U_phase: Quantity
         Phase voltage (line-to-ground voltage) of the low-voltage
         distribution network.
-    R_b: Quantity
-        Measured earth spreading resistance of the consumer installation.
-    R_e: Quantity, optional
-        The earth contact resistance between ground and any extraneous
-        conductive part. By default, this is set to 5 ohm (according to AREI
-        art. 80.03).
+    R_e: Quantity
+        Earth spreading resistance of the consumer installation.
+    R_e_extr: Quantity, optional
+        Earth-contact resistance of any extraneous conductive part. By default,
+        this is set to 5 ohm (according to AREI art. 80.03).
     skin_condition: str, {"BB1", "BB2" (default)}
-        Code that identifies the condition of the human skin: either dry
-        (BB1) or wet (BB2).
+        Code that identifies the human skin condition: either dry (BB1) or wet
+        (BB2).
     final_circuit: bool, default True
-        Indicates that the cable is feeding an electrical consumer (of which
-        the nominal current does not exceed 32 A).
+        Indicates the cable is feeding an electrical consumer (of which the
+        nominal current does not exceed 32 A).
     neutral_distributed: bool, default True
-        Indicates whether the neutral conductor is also distributed in the
-        network or not.
+        Indicates whether the neutral conductor is distributed in the network.
 
     Returns
     -------
-    IndirectContactProtectionResult.
-        I_f: Quantity
-            Fault current.
-        U_f: Quantity | None
-            Voltage (touch potential rise) between earth (0 V) and an
-            exposed conductive part of the consumer installation.
-        t_c_max: Quantity | None
-            Maximum allowable contact duration with touch voltage according
-            to the applicable safety curve.
-        R_b_max: Quantity | None
-            Maximum allowable earth spreading resistance of the consumer
-            installation.
+    IndirectContactProtResult
     """
-    fault = ITExtraneousConductivePartFault(U_phase, R_b, R_e, skin_condition, neutral_distributed)
+    fault = ITExtraneousConductivePartFault(
+        U_phase,
+        R_e, R_e_extr,
+        skin_condition,
+        neutral_distributed
+    )
     if final_circuit:
         t_c_max_iec = get_max_allow_disconnect_time(U_phase, EarthingSystem.TN)
-        t_c_max = min(fault.t_c_max.to('ms'), t_c_max_iec.to('ms'))
+        t_c_max = min(fault.t_contact_max.to('ms'), t_c_max_iec.to('ms'))
     else:
-        t_c_max = fault.t_c_max
-    return ICPResult(
+        t_c_max = fault.t_contact_max
+    return IndirectContactProtResult(
         I_f=fault.I_fault,
         U_f=fault.U_fault,
-        R_b_max=fault.R_b_max,
-        t_c_max=t_c_max
+        R_e_max=fault.R_e_max,
+        t_contact_max=t_c_max
     )

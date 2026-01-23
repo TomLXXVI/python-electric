@@ -13,7 +13,9 @@ __all__ = ["Bus", "Connection", "Component", "Network", "TComponent"]
 class Bus:
     """A node in the network graph."""
     name: str
+
     U_base: Quantity = field(init=False, default=None)
+
 
 @dataclass(slots=True)
 class Connection:
@@ -163,6 +165,160 @@ class Network:
                     matches.append((comp, conn_id, start_id, end_id))
 
         return matches
+
+    def get_source_bus_ids(self) -> list[str]:
+        """
+        Return a list with the end bus IDs of all connections that start from
+        ground.
+        """
+        source_bus_ids = [
+            conn.end.name for conn in [
+                conn for conn in self.connections.values()
+                if conn.start.name == self.GROUND_ID
+            ]
+        ]
+        return source_bus_ids
+
+    def find_connection_path(
+        self,
+        start_bus_id: str,
+        end_bus_id: str
+    ) -> list[str]:
+        """
+        Find a directed path (sequence of connection IDs) from a start bus to an
+        end bus.
+
+        The method treats the network as a directed graph where every connection
+        points from ``start`` to ``end``. The returned list contains the
+        connection IDs in the order they must be traversed to go from
+        ``start_bus_id`` to ``end_bus_id``.
+
+        Parameters
+        ----------
+        start_bus_id:
+            ID/name of the bus where the path starts.
+        end_bus_id:
+            ID/name of the bus where the path ends.
+
+        Returns
+        -------
+        list[str]
+            Ordered list of connection IDs forming the path. If ``start_bus_id``
+            equals ``end_bus_id``, an empty list is returned.
+
+        Raises
+        ------
+        KeyError
+            If either bus does not exist in the network.
+        ValueError
+            If no directed path exists between the busses.
+        """
+        if start_bus_id not in self._busses:
+            raise KeyError(f"Bus '{start_bus_id}' not found.")
+        if end_bus_id not in self._busses:
+            raise KeyError(f"Bus '{end_bus_id}' not found.")
+        if start_bus_id == end_bus_id:
+            return []
+
+        # Build adjacency: start_bus -> [(conn_id, end_bus)]
+        adjacency: dict[str, list[tuple[str, str]]] = {}
+        for conn_id, conn in self._connections.items():
+            adjacency.setdefault(conn.start.name, []).append((conn_id, conn.end.name))
+
+        # Breadth-first search to find the shortest path in number of edges.
+        from collections import deque
+
+        queue: deque[str] = deque([start_bus_id])
+        visited: set[str] = {start_bus_id}
+        # For each visited bus (except start): store (previous_bus, via_connection_id)
+        prev: dict[str, tuple[str, str]] = {}
+
+        while queue:
+            bus = queue.popleft()
+            for conn_id, nxt in adjacency.get(bus, []):
+                if nxt in visited:
+                    continue
+                visited.add(nxt)
+                prev[nxt] = (bus, conn_id)
+                if nxt == end_bus_id:
+                    queue.clear()
+                    break
+                queue.append(nxt)
+
+        if end_bus_id not in prev:
+            raise ValueError(
+                f"No directed path found from bus '{start_bus_id}' to bus '{end_bus_id}'."
+            )
+
+        # Reconstruct path (reverse)
+        path_conn_ids: list[str] = []
+        cur = end_bus_id
+        while cur != start_bus_id:
+            p_bus, p_conn = prev[cur]
+            path_conn_ids.append(p_conn)
+            cur = p_bus
+        path_conn_ids.reverse()
+        return path_conn_ids
+
+    def find_reachable_final_busses(
+        self,
+        source_bus_id: str,
+        *,
+        include_ground: bool = False
+    ) -> list[Bus]:
+        """
+        Find all *reachable* final busses starting from ``source_bus_id``.
+
+        A "final bus" (leaf node) is defined as a bus with no outgoing
+        connections (out-degree = 0) *within the directed network graph*.
+
+        Parameters
+        ----------
+        source_bus_id:
+            ID/name of the bus where the search starts.
+        include_ground:
+            If False (default), the special ground bus is excluded from the
+            result.
+
+        Returns
+        -------
+        list[Bus]
+            List of reachable busses that have no outgoing connections.
+            If the source bus itself has no outgoing connections, it will be
+            included (unless it is the ground bus and include_ground=False).
+
+        Raises
+        ------
+        KeyError
+            If ``source_bus_id`` does not exist in the network.
+        """
+        if source_bus_id not in self._busses:
+            raise KeyError(f"Bus '{source_bus_id}' not found.")
+
+        # Build adjacency: bus -> next busses
+        adjacency: dict[str, list[str]] = {}
+        for conn in self._connections.values():
+            adjacency.setdefault(conn.start.name, []).append(conn.end.name)
+
+        from collections import deque
+        q = deque([source_bus_id])
+        visited = {source_bus_id}
+        while q:
+            b = q.popleft()
+            for nxt in adjacency.get(b, []):
+                if nxt not in visited:
+                    visited.add(nxt)
+                    q.append(nxt)
+
+        start_bus_ids = {conn.start.name for conn in self._connections.values()}
+
+        finals: list[Bus] = []
+        for bus_id in visited:
+            if not include_ground and bus_id == self.GROUND_ID:
+                continue
+            if bus_id not in start_bus_ids:
+                finals.append(self._busses[bus_id])
+        return finals
 
     @property
     def ground(self) -> Bus:

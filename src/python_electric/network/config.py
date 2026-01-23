@@ -49,7 +49,7 @@ class PEConductorConfig:
     insul_mat: InsulationMaterial = InsulationMaterial.PVC
     mech_protected: bool = False  # e.g. PE-conductor in tube or not
     separated: bool = False  # PE-conductor separate from cable or not
-    t_u: Quantity = Q_(200, 'ms')  # assumed interruption time of current-protective device = duration of fault current
+    t_interrupt: Quantity = Q_(200, 'ms')  # assumed interruption time of current-protective device = duration of fault current
 
     def __str__(self) -> str:
         d = asdict(self)

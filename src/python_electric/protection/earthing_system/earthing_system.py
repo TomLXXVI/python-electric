@@ -1,12 +1,12 @@
 from enum import StrEnum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from python_electric import Quantity, Q_
 
 
 __all__ = [
     "EarthingSystem",
-    "ICPResult",
+    "IndirectContactProtResult",
     "get_max_allow_disconnect_time"
 ]
 
@@ -44,7 +44,7 @@ def get_max_allow_disconnect_time(
     Parameters
     ----------
     U_phase: Quantity
-        Line-to-neutral system voltage. Must be higher than 50 V.
+        Phase (line-to-neutral/ground) system voltage. Must be higher than 50 V.
     earthing_system: EarthingSystem
         Either a TT- or one of the TN-earthing systems.
 
@@ -66,12 +66,12 @@ def get_max_allow_disconnect_time(
             raise ValueError("No result for `U_phase` equal to 50 V or less.")
     else:
         raise ValueError(
-            "Function only usable for TT- and IT-earthing schemes."
+            "Function only usable for TT- and TN-earthing schemes."
         )
 
 
 @dataclass
-class ICPResult:
+class IndirectContactProtResult:
     """
     Holds the results returned from methods of `AbstractEarthingSystem`-derived
     classes that check protection against electric shock due to indirect
@@ -79,32 +79,62 @@ class ICPResult:
 
     Attributes
     ----------
-    I_f: Quantity | None
+    I_f: Quantity, optional
         Fault current due to a line-to-ground fault.
-    U_f: Quantity | None
-        Voltage (touch potential rise) between earth (0 V) and an exposed
-        conductive part of the low-voltage distribution network.
-    L_max: Quantity | None
-        Maximum allowable length of the cable between the distribution board and
-        the appliance/sub-distribution board, so that the minimum short-circuit
-        current calculated at the end of the cable would equal the maximum limit
-        of the magnetic trip current of the circuit breaker.
-    t_c_max: Quantity | None
-        Maximum allowable contact duration with touch voltage according to the
-        applicable safety curve.
-    R_b_max: Quantity | None
+    U_f: Quantity, optional
+        Fault voltage (i.e. the touch potential rise) between earth (0 V) and an
+        exposed conductive part of the low-voltage network.
+    L_max: Quantity, optional
+        Maximum allowable cable length between the distribution board and
+        the appliance (or sub-distribution board), for which the circuit
+        breaker's maximum short-circuit tripping current I_m_max becomes equal
+        to the short-circuit current that flows when a line-to-ground fault
+        occurs at the end of the cable.
+    t_contact_max: Quantity, optional
+        Maximum allowable contact duration according to the safety curve.
+    R_e_max: Quantity, optional
         Maximum allowable earth spreading resistance of the low-voltage
-        distribution network.
-    R_pe_max: Quantity | None
-        Maximum allowable resistance of the PE-conductor between the main
-        earthing terminal and the most distant exposed conductive part in the
-        distribution network, so that the fault current would equal the maximum
-        limit of the magnetic trip current of the circuit breaker just upstream
-        of the most distant exposed conductive part.
+        distribution network (TN), or of the consumer installation (IT).
+    R_pe_max: Quantity, optional
+        Maximum allowable resistance of the PE-conductor(s) between the main
+        earthing terminal and the exposed conductive part at the end of the
+        cable, given the fault voltage U_f and the circuit breaker's maximum
+        short-circuit tripping current I_m_max. The actual, measured resistance
+        must be smaller than this R_pe_max.
     """
     I_f: Quantity | None = None
     U_f: Quantity | None = None
     L_max: Quantity | None = None
-    t_c_max: Quantity | None = None
-    R_b_max: Quantity | None = None
+    t_contact_max: Quantity | None = None
+    R_e_max: Quantity | None = None
     R_pe_max: Quantity | None = None
+
+    passed: bool = field(init=False, default=False)
+
+    def __str__(self) -> str:
+        s = [f"\tpassed: {self.passed}"]
+        if self.I_f is not None:
+            s.append(f"\tfault current: {self.I_f.to('A'):~P.1f}")
+        if self.U_f is not None:
+            s.append(f"\tfault voltage: {self.U_f.to('V'):~P.1f}")
+        if self.t_contact_max is not None:
+            s.append(
+                f"\tmaximum allowable fault duration: "
+                f"{self.t_contact_max.to('ms'):~P.0f}"
+            )
+        if self.L_max is not None:
+            s.append(
+                f"\tmaximum allowable cable length: "
+                f"{self.L_max.to('m'):~P.0f}"
+            )
+        if self.R_e_max is not None:
+            s.append(
+                f"\tmaximum allowable earth-spreading resistance: "
+                f"{self.R_e_max.to('ohm'):~P.0f}"
+            )
+        if self.R_pe_max is not None:
+            s.append(
+                f"\tmaximum allowable resistance of the PE-conductor(s): "
+                f"{self.R_pe_max.to('mohm'):~P.0f}"
+            )
+        return "\n".join(s)

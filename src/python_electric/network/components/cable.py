@@ -17,7 +17,7 @@ import numpy as np
 from ... import Quantity, Q_, VoltReference, PhaseSystem
 from ...materials import ConductorMaterial, InsulationMaterial, INSULATION_PROPS
 from ...sizing.cable import *
-from ...protection.earthing_system import EarthingSystem, ICPResult
+from ...protection.earthing_system import EarthingSystem, IndirectContactProtResult
 from ...protection import CircuitBreaker, earthing_system, check_current_based_selectivity, PEConductor
 from ...calc import voltage_drop
 from ...utils.charts import LineChart
@@ -477,9 +477,38 @@ class Cable(Component):
         final_circuit: bool = True,
         neutral_distributed: bool = True,
         R_e: Quantity | None = None
-    ) -> ICPResult | None:
+    ) -> IndirectContactProtResult | None:
+        """
+        Checks the protection of the cable against indirect contact.
+
+        Parameters
+        ----------
+        S_pe: Quantity, optional
+            Cross-sectional area of the earth protective conductor. If None,
+            `S_pe` is set equal to `S_phase`.
+        skin_condition: str, {"BB1", "BB2" (default)}
+            Code that identifies the condition of the human skin: either dry
+            (BB1) or wet (BB2).
+        final_circuit: bool, default True
+            Indicates that the cable is feeding an electrical consumer of which
+            the nominal current does not exceed 32 A.
+        neutral_distributed: bool, default True
+            Only used with IT-earthing. Indicates whether the neutral conductor
+            is also distributed in the network or not.
+        R_e: Quantity, optional
+            Only used with IT-earthing. Indicates the spreading resistance of
+            earth electrodes in the consumer installation. Must be set when
+            two exposed conductive parts in the fault loop are both connected to
+            a different, separate earth electrode. It is assumed that all earth
+            electrodes in the consumer installation exhibit the same spreading
+            resistance.
+
+        Returns
+        -------
+        IndirectContactProtResult
+        """
         if self.earthing_system.is_TN():
-            return earthing_system.TN.check_indirect_contact(
+            res = earthing_system.TN.check_indirect_contact(
                 U_phase=self.U_ph,
                 L_cable=self.L,
                 S_phase=self.S,
@@ -489,8 +518,15 @@ class Cable(Component):
                 skin_condition = skin_condition,
                 final_circuit = final_circuit
             )
+
+            c1 = res.t_contact_max > self.circuit_breaker.t_m
+            c2 = res.L_max > self.L
+            if c1 or c2:
+                res.passed = True
+            return res
+
         elif self.earthing_system.is_IT():
-            return earthing_system.IT.check_indirect_contact(
+            res = earthing_system.IT.check_indirect_contact(
                 U_phase=self.U_ph,
                 L_cable=self.L,
                 S_phase=self.S,
@@ -502,6 +538,8 @@ class Cable(Component):
                 neutral_distributed=neutral_distributed,
                 R_e=R_e
             )
+            return res
+
         return None
 
     @property
@@ -700,17 +738,18 @@ def check_selectivity(
         cb_down = down.circuit_breaker
         res = check_current_based_selectivity(cb_down, cb_up)
         if res:
-            I_sc_max_down = down.I_sc_max
-            if I_sc_max_down < cb_up.I_m_min:
+            if down.I_sc_max < cb_up.I_m_min:
                 return SelectivityResult(total=True, exists=True)
             elif not cb_up.has_adjustable_delay:
                 return SelectivityResult(total=False, exists=True)
-            t_cable_max = up.I2t / I_sc_max_down ** 2
-            I_sc_min_up = up.I_sc_min
-            t_cable_min_up = up.I2t / I_sc_min_up ** 2
+
+            t_cable_max_up = up.I2t / down.I_sc_max ** 2
+            t_cable_min_up = up.I2t / up.I_sc_min ** 2
+
             res = up.check_indirect_contact_protection(final_circuit=False)
-            t_safety_max = res.t_c_max
-            t_trip_max = min(t_cable_max, t_cable_min_up, t_safety_max)
+            t_safety_max = res.t_contact_max
+
+            t_trip_max = min(t_cable_max_up, t_cable_min_up, t_safety_max)
             t_margin = t_trip_max - cb_up.t_m
             return SelectivityResult(
                 total=True,
