@@ -6,17 +6,25 @@ buildings. The library implements fundamental protection principles inspired by
 and aligned with IEC standards, enabling engineers to perform:
 
 * Cable sizing
-* Overload protection checks
-* Short-circuit protection checks
+* Overload protection verification
+* Short-circuit protection verification (maximum and minimum fault currents)
 * Basic current-based selectivity analysis
 * Time-based selectivity estimation for industrial circuit breakers
 * Earthing system verification including protection against electric shock due 
   to indirect contact
 
-An example Jupyter notebook is provided (`ex1_sizing_LV_network_01.ipynb`) 
+python-electric focuses on **conceptual design and verification** of LV
+installations. It is intended for engineers who want to explore, document,
+and validate design choices early in the design process, before moving to
+manufacturer-specific tools or certified calculation software.
+
+An example Jupyter notebook is provided (`/examples/example_01/ex01_LV_design.ipynb`) 
 demonstrating the workflow and the steps that are taken in the design of a 
 low-voltage electrical network. This notebook reproduces a worked example from 
 the reference book *Laagspanningsinstallaties: technologie en ontwerp*.
+
+The design philosophy of python-electric is to remain transparent, conservative,
+and standard-oriented, favoring clarity and traceability over black-box accuracy.
 
 
 ## Limitations
@@ -25,7 +33,7 @@ the reference book *Laagspanningsinstallaties: technologie en ontwerp*.
 * Selectivity is computed only in a **normative, conservative** sense.
 * Arc-energy reduction, breaker coordination classes, and cascading effects 
   (back-up protection) are outside scope.
-* The package currently supports only **TN earthing systems**.
+* The package currently supports **TN earthing systems** and **IT earthing systems**.
 
 
 ## License
