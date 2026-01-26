@@ -7,6 +7,7 @@ Electrical Installation Guide 2007, Merlin Gerin, Chapter G, Fig. G21a.
 """
 from ....materials import ConductorProperties, InsulationProperties
 from ....utils.lookup_table import LookupTable
+from .exceptions import CurrentExceedanceError
 
 
 def _create_index_table():
@@ -117,10 +118,16 @@ def get_cross_sectional_area(
             if 1 < num_loaded_conductors <= 3:
                 key = insulation_props.type + str(num_loaded_conductors)
                 col_index = index_table[ref_method][key]
-                if conductor_props.type == "copper":
-                    csa = copper_table.rowheader_value(col_index, current)
-                else:
-                    csa = alu_table.rowheader_value(col_index, current)
+                try:
+                    if conductor_props.type == "copper":
+                        csa = copper_table.rowheader_value(col_index, current)
+                    else:
+                        csa = alu_table.rowheader_value(col_index, current)
+                except ValueError:
+                    raise CurrentExceedanceError(
+                        f"Required minimal conductor cross-sectional area "
+                        f"cannot be determined for current {current:.0f} A."
+                    ) from None
                 return csa
             else:
                 raise ValueError(
@@ -139,15 +146,21 @@ def get_ampacity(
     ref_method: str,
     cross_sectional_area: float
 ) -> float:
-    if conductor_props.type == "copper" or conductor_props.type == "aluminium":
+    if conductor_props.type in ["copper", "aluminium"]:
         if insulation_props.type in ["PVC", "XLPE"]:
             if 1 < num_loaded_conductors <= 3:
                 key = insulation_props.type + str(num_loaded_conductors)
                 col_index = index_table[ref_method][key]
-                if conductor_props.type == "copper":
-                    amp = copper_table.data_value(cross_sectional_area, col_index)
-                else:
-                    amp = alu_table.data_value(cross_sectional_area, col_index)
+                try:
+                    if conductor_props.type == "copper":
+                        amp = copper_table.data_value(cross_sectional_area, col_index)
+                    else:
+                        amp = alu_table.data_value(cross_sectional_area, col_index)
+                except ValueError:
+                    raise ValueError(
+                        f"Ampacity cannot be determined for conductor "
+                        f"with CSA {cross_sectional_area:.0f} mm²."
+                    ) from None
                 return amp
             else:
                 raise ValueError(

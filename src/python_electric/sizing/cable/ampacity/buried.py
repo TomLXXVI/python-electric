@@ -83,7 +83,7 @@ def get_cross_sectional_area(
     num_loaded_conductors: int,
     current: float
 ) -> float:
-    if conductor_props.type == "copper" or conductor_props.type == "aluminium":
+    if conductor_props.type in ["copper", "aluminium"]:
         if insulation_props.type in ["PVC", "XLPE"]:
             if 1 < num_loaded_conductors <= 3:
                 key = insulation_props.type + str(num_loaded_conductors)
@@ -108,7 +108,7 @@ def get_ampacity(
     num_loaded_conductors: int,
     cross_sectional_area: float
 ) -> float:
-    if conductor_props.type == "copper" or conductor_props.type == "aluminium":
+    if conductor_props.type in ["copper", "aluminium"]:
         if insulation_props.type in ["PVC", "XLPE"]:
             if 1 < num_loaded_conductors <= 3:
                 key = insulation_props.type + str(num_loaded_conductors)

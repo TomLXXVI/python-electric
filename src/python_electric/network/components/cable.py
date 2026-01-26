@@ -22,7 +22,7 @@ from ...protection import CircuitBreaker, earthing_system, check_current_based_s
 from ...calc import voltage_drop
 from ...utils.charts import LineChart
 
-from ..network import Component
+from ..graph import Component
 
 __all__ = [
     "Cable",
@@ -54,7 +54,7 @@ class Cable(Component):
     ----------
     name: str
         Uniquely identifies the cable in the network.
-    I_b: Quantity
+    I_b_tot: Quantity
         Rated load current through the cable.
     U_l: Quantity = Q_(400, 'V')
         Line-to-line voltage in case of a three-phase system or neutral-to-line
@@ -78,11 +78,8 @@ class Cable(Component):
         Material the cable conductors are made of.
     insulation_material: InsulationMaterial = InsulationMaterial.XLPE
         Insulation material around the conductors of the cable.
-    ambient: Ambient = Ambient.AIR
-        Ambient where the cable is installed, either in air or buried in the
-        ground. See enum Ambient.
     T_amb: Quantity = Q_(30, 'degC')
-        Ambient temperature of the cable.
+        Temperature of the cable surroundings.
     install_method: InstallMethod = InstallMethod.E
         Installation method according to enum InstallMethod.
     cable_mounting: CableMounting = CableMounting.PERFORATED_TRAY
@@ -91,8 +88,8 @@ class Cable(Component):
     cable_arrangement: CableArrangement = CableArrangement.MULTICORE
         Specifies in more detail how cables are arranged with respect to each
         other. See enum CableArrangement.
-    num_circuits: int = 1
-        The number of circuits or multicore cables in the proximity of the
+    num_other_circuits: int = 1
+        The number of other circuits or multicore cables in the proximity of the
         cable.
     h3_fraction: float = 0.0
         Fraction of third-order harmonics present in the total load current;
@@ -119,6 +116,8 @@ class Cable(Component):
     z0_x_factor: float, default 3.0
         Scaling factor applied to the negative-sequence reactance of the
         cable to determine its zero-sequence reactance.
+    n_phase: int, default 1
+        Number of parallel single-core cables per phase.
 
     Attributes
     ----------
@@ -132,8 +131,8 @@ class Cable(Component):
         Standardized nominal current which is just greater than the rated load
         current of the cable. This current can be used to select the
         current-protective device for the cable.
-    I_bc: Quantity
-        Load current corrected by multiplication with the simultaneity factor
+    I_b_tot_comp: Quantity
+        Compensated load current taking account of the simultaneity factor
         and expansion factor. This current is used to size the cable.
     Z_dict: dict[str, dict[int, Quantity]]
         Dictionary containing the zero-sequence (key 0), positive-sequence
@@ -189,7 +188,7 @@ class Cable(Component):
         the cable that can be protected by this circuit breaker.
     """
     name: str
-    I_b: Quantity
+    I_b_tot: Quantity
     U_l: Quantity = Q_(400, 'V')
     cos_phi: float = 0.8
     L: Quantity = Q_(1.0, 'm')
@@ -197,12 +196,11 @@ class Cable(Component):
     k_ext: float = 1.0
     conductor_material: ConductorMaterial = ConductorMaterial.COPPER
     insulation_material: InsulationMaterial = InsulationMaterial.XLPE
-    ambient: Ambient = Ambient.AIR
     T_amb: Quantity = Q_(30, 'degC')
     install_method: InstallMethod = InstallMethod.E
     cable_mounting: CableMounting = CableMounting.PERFORATED_TRAY
     cable_arrangement: CableArrangement = CableArrangement.MULTICORE
-    num_circuits: int = 1
+    num_other_circuits: int = 1
     h3_fraction: float = 0.0
     sizing_based_on_I_nom: bool = False
     earthing_system: EarthingSystem = EarthingSystem.TN
@@ -217,7 +215,7 @@ class Cable(Component):
 
     circuit_breaker: CircuitBreaker = field(init=False, default=None)
 
-    I_bc: Quantity = field(init=False, default=None)
+    I_b_tot_comp: Quantity = field(init=False, default=None)
     I_z: Quantity = field(init=False, default=None)
     I_z0: Quantity = field(init=False, default=None)
     I_n: Quantity = field(init=False, default=None)
@@ -231,16 +229,31 @@ class Cable(Component):
     z0_r_factor: float = 3.0
     z0_x_factor: float = 3.0
 
+    # Number of parallel single-core cables per phase
+    n_phase: int = 1
+
     def __post_init__(self):
         super().__init__(self.name)
-        self.I_bc = self._get_corr_load_current()
-        self.U_ph = self._get_phase_voltage()
-        self._size_cable()
-        self.Z_dict = self._calc_impedance_dict()
-        self.dU, self.dU_rel = self.get_voltage_drop(self.U_l, self.I_b, self.cos_phi)
 
-    def _get_corr_load_current(self) -> Quantity:
-        return self.I_b * self.k_simul * self.k_ext
+        self.I_b_tot_comp = self._get_compensated_load_current()
+        self.U_ph = self._get_phase_voltage()
+
+        i_max = 5
+        for i in range(i_max):
+            try:
+                self._configure_cable()
+            except CurrentExceedanceError as e:
+                if i < i_max:
+                    self.n_phase += 1
+                    continue
+                else:
+                    raise e
+
+        self.Z_dict = self._calc_impedance_dict()
+        self.dU, self.dU_rel = self.get_voltage_drop(self.U_l, self.I_b_tot, self.cos_phi)
+
+    def _get_compensated_load_current(self) -> Quantity:
+        return self.I_b_tot * self.k_simul * self.k_ext
 
     def _get_phase_voltage(self) -> Quantity:
         if self.phase_system.is_ph3:
@@ -248,47 +261,44 @@ class Cable(Component):
         else:
             return self.U_l
 
-    def _size_cable(self):
-        cd = self.__collect_data()
+    def _configure_cable(self):
+        cd = self.__collect_user_data()
         if self.S is None:
-            # If conductor csa is not specified, calculate minimal required csa
+            # If conductor csa is not specified: calculate required minimal csa
             self.__size_cable(cd)
         else:
-            # User specified the csa of cable conductors: check if ok.
+            # User has specified the csa of cable conductors: check if ok.
             S_user = deepcopy(self.S)
             self.__size_cable(cd)
             if self.S.to('mm ** 2') > S_user.to('mm ** 2'):
                 raise ValueError(
-                    f"The specified csa {S_user.to('mm ** 2'):~P.2f} is too "
-                    f"small. A csa of at least {self.S.to('mm ** 2'):~P.2f} "
-                    f"is required."
+                    f"The csa {S_user.to('mm ** 2'):~P.2f} is too small. "
+                    f"Should at least have {self.S.to('mm ** 2'):~P.2f}."
                 ) from None
             else:
                 self.__update_cable_params(cd, S_user)
 
-    def __collect_data(self) -> CableData:
-        if self.phase_system.is_ph3:
-            num_loaded_conductors: int = 3
-        else:
-            num_loaded_conductors: int = 2
-
+    def __collect_user_data(self) -> CableData:
+        num_circuits = self.num_other_circuits + self.n_phase
         cd = CableData(
-            I_b=self.I_bc.to('A').m,
+            I_b=self.I_b_tot_comp.to('A').m / self.n_phase,
             L=self.L.to('m').m,
             conductor_type=self.conductor_material,
             insulation_type=self.insulation_material,
-            ambient=self.ambient,
             T_amb=self.T_amb.to('degC').m,
             install_method=self.install_method,
             cable_mounting=self.cable_mounting,
             cable_arrangement=self.cable_arrangement,
-            num_circuits=self.num_circuits,
-            num_loaded_conductors=num_loaded_conductors,
+            num_circuits=num_circuits,
+            num_loaded_conductors=3 if self.phase_system.is_ph3 else 2,
             h3_content=self.h3_fraction,
         )
         return cd
 
-    def __size_cable(self, cd: CableData) -> None:
+    def __size_cable(
+        self,
+        cd: CableData
+    ) -> None:
         cd = get_size(cd, self.sizing_based_on_I_nom)
         self.S = Q_(cd.S, 'mm**2')
         self.I_z = Q_(cd.I_z, 'A')
@@ -297,7 +307,11 @@ class Cable(Component):
         self.I2t = Q_(cd.I2t, 'A**2*s')
         return None
 
-    def __update_cable_params(self, cd: CableData, S_user: Quantity) -> None:
+    def __update_cable_params(
+        self,
+        cd: CableData,
+        S_user: Quantity
+    ) -> None:
         cd = set_size(cd, S_user.to('mm**2').m)
         self.S = Q_(cd.S, 'mm**2')
         self.I_z = Q_(cd.I_z, 'A')
@@ -314,10 +328,9 @@ class Cable(Component):
         Returns the positive, negative, and zero-sequence impedance of the cable
         at the given temperature `T` of the conductors.
 
-        Parameters
-        ----------
-        T: Quantity
-            Temperature of the conductors.
+        In case there are multiple parallel single-core cables per phase, the
+        parallel impedance of the individual cables is the impedance of the
+        cable.
 
         Returns
         -------
@@ -337,13 +350,23 @@ class Cable(Component):
             z0_x_factor=self.z0_x_factor,
             name=self.name
         )
-        return {1: c.Z1, 2: c.Z2, 0: c.Z0}
+        return {
+            1: c.Z1 / self.n_phase,
+            2: c.Z2 / self.n_phase,
+            0: c.Z0 / self.n_phase
+        }
 
     def _calc_impedance_dict(self) -> dict[str, dict[int, Quantity]]:
-        insprops = INSULATION_PROPS[self.insulation_material]
-        T_nom = insprops.T_max_cont
-        T_rng = {"T20": Q_(20, 'degC'), "T_n": Q_(T_nom, 'degC'), "T150": Q_(150, 'degC')}
-        return {k: self.get_impedance(v) for k, v in T_rng.items()}
+        T_nom = INSULATION_PROPS[self.insulation_material].T_max_cont
+        T_rng = {
+            "T20": Q_(20, 'degC'),
+            "T_n": Q_(T_nom, 'degC'),
+            "T150": Q_(150, 'degC')
+        }
+        return {
+            k: self.get_impedance(v)
+            for k, v in T_rng.items()
+        }
 
     def get_voltage_drop(
         self,
@@ -366,8 +389,8 @@ class Cable(Component):
             Load current.
         cos_phi: float
             Power factor of the load.
-        volt_ref: VoltReference | None = None
-            In case of a three-phase cable, it indicates the reference of the
+        volt_ref: VoltReference, optional
+            In case of a three-phase cable, indicates the reference of the
             voltage measurement: either the voltage drop is measured between
             ground (neutral) and a line, or it is measured between two lines.
             If `None`, voltage drop is taken between ground/neutral and a line.
@@ -380,7 +403,7 @@ class Cable(Component):
 
         R = Q_(self.Z_dict["T_n"][1].m.real, 'ohm')
         X = Q_(self.Z_dict["T_n"][1].m.imag, 'ohm')
-        dU = voltage_drop(R, X, I_b, volt_ref, cos_phi)
+        dU = voltage_drop(R, X, I_b / self.n_phase, volt_ref, cos_phi)
 
         U = U_l.to('V')
         if volt_ref == VoltReference.PH3_GROUND_TO_LINE:
@@ -446,10 +469,10 @@ class Cable(Component):
         cb = CircuitBreaker(
             standard=standard,
             category=category,
-            I_b=self.I_b,
-            I_n=self.I_n,
-            I_z=self.I_z,
-            I2t=self.I2t,
+            I_b=self.I_b_tot,
+            I_n=self.I_n_tot,
+            I_z=self.I_z_tot,
+            I2t=self.I2t_tot,
             I_cu=I_cu,
             E_t=E_t,
             k_m=k_m,
@@ -557,12 +580,51 @@ class Cable(Component):
         else:
             self._S_pe = v
 
+    @property
+    def I_b(self) -> Quantity:
+        """
+        Returns the load current in a single cable (in the case of multiple
+        parallel single-core cables per phase).
+        """
+        return self.I_b_tot / self.n_phase
+
+    @property
+    def I_n_tot(self) -> Quantity:
+        """
+        Returns the nominal current through multiple parallel single-core
+        cables per phase.
+        """
+        return self.I_n * self.n_phase
+
+    @property
+    def I_z0_tot(self) -> Quantity:
+        """
+        Returns the ampacity of multiple parallel single-core cables per phase
+        at reference conditions.
+        """
+        return self.I_z0 * self.n_phase
+
+    @property
+    def I_z_tot(self) -> Quantity:
+        """
+        Returns the ampacity of multiple parallel single-core cables per phase.
+        """
+        return self.I_z * self.n_phase
+
+    @property
+    def I2t_tot(self) -> Quantity:
+        """
+        Returns the Joule-integral of multiple parallel single-core cables per
+        phase.
+        """
+        return self.I2t * self.n_phase
+
 
 def plot_cable(cable: Cable) -> LineChart:
     t_min, t_max = 1e-6, 1e6
     t_5s = 5.0
-    I2t = cable.I2t.to('A ** 2 * s').m
-    I_z = cable.I_z.to('A').m
+    I2t = cable.I2t_tot.to('A ** 2 * s').m
+    I_z = cable.I_z_tot.to('A').m
     I_min = 1e-3
 
     t_adiabatic_ar1 = np.linspace(t_min, t_5s)

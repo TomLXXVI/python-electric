@@ -1,7 +1,7 @@
 """
 Core package for using python-electric.
 """
-from .network import *
+from .graph import *
 from .components import *
 from .short_circuit_calc import *
 from .topology import *

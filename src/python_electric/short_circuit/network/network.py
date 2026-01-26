@@ -168,8 +168,12 @@ class Network:
         column_index: int
     ) -> TImpedanceValue:
         """Get impedance value at given row and column index."""
-        row = self._matrix[row_index]
-        return row[column_index]
+        try:
+            row = self._matrix[row_index]
+            elem = row[column_index]
+        except KeyError:
+            return 0.0
+        return elem
 
     def _get_row(self, row_index: int) -> TImpedanceMatrixRow:
         return self._matrix[row_index]
@@ -495,9 +499,12 @@ class Network:
         """Prints the bus impedance matrix of the network to screen."""
         print(str(self))
 
-    def get_node_index(self, node_ID: str) -> int:
+    def get_node_index(self, node_ID: str) -> int | None:
         """Returns the index of the node whose ID is given."""
-        node_index = self._nodes_IDs[node_ID].index
+        try:
+            node_index = self._nodes_IDs[node_ID].index
+        except KeyError:
+            return None
         return node_index
 
     def get_node(self, node_ID: str) -> Node:

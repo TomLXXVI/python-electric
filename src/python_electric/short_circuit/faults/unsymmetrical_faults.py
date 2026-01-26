@@ -32,6 +32,7 @@ A = np.array([
 A_inv = np.linalg.inv(A)
 
 
+# noinspection PyTypeHints
 def transform_to_012(Q_abc: npt.ArrayLike) -> npt.NDArray:
     """
     Transforms a three-phase quantity `Q_abc` to its symmetrical components
@@ -39,14 +40,14 @@ def transform_to_012(Q_abc: npt.ArrayLike) -> npt.NDArray:
     
     Parameters
     ----------
-    Q_abc:
+    Q_abc: npt.ArrayLike
         Three-phase quantity represented by its individual phase components in
         an array-like structure, e.g. a list like `[a, b, c]` or a Numpy array
         like `np.array([a, b, c])`.
     
     Returns
     -------
-    Q_012:
+    Q_012: npt.NDArray
         Symmetrical components of the three-phase quantity ordered in a 1D 
         (flat) Numpy array. 
     """
@@ -59,6 +60,7 @@ def transform_to_012(Q_abc: npt.ArrayLike) -> npt.NDArray:
     return Q_012.flatten()
 
 
+# noinspection PyTypeHints
 def transform_to_abc(Q_012: npt.ArrayLike) -> npt.NDArray:
     """
     Transforms the symmetrical components `Q_012` (zero sequence, positive
@@ -88,6 +90,7 @@ def transform_to_abc(Q_012: npt.ArrayLike) -> npt.NDArray:
     return Q_abc.flatten()
 
 
+# noinspection PyTypeHints
 def add_phase_shift(Q: complex | npt.ArrayLike, degrees: float) -> npt.NDArray:
     """
     Adds a phase shift (in degrees) to the phase angle of complex number `Q`.
@@ -96,6 +99,7 @@ def add_phase_shift(Q: complex | npt.ArrayLike, degrees: float) -> npt.NDArray:
     return Q
 
 
+# noinspection PyTypeHints
 def add_deltastar_transformer_shift(I_012: npt.ArrayLike) -> npt.NDArray:
     """
     Adds a delta-star transformer phase shift to the sequence components
@@ -137,17 +141,18 @@ class UnSymmetricalFault(ABC):
             you use voltage factor c, leave parameter U_prefault to its
             default value of 1.
         """
-        self._network_0 = network_012[0]
-        self._network_1 = network_012[1]
-        self._network_2 = network_012[2]
+        self._nw0 = network_012[0]
+        self._nw1 = network_012[1]
+        self._nw2 = network_012[2]
+
         self._U_phase: Union[float, complex] = c * U_prefault
         self._faulted_node_ID: Optional[str] = None
-        self._faulted_node_index_0: Optional[int] = None
-        self._faulted_node_index_1: Optional[int] = None
-        self._faulted_node_index_2: Optional[int] = None
-        self._Z_f: Union[float, complex] = 0.0
-        self._I_f_012: Optional[np.ndarray] = None
-
+        self._faulted_node_index0: Optional[int] = None
+        self._faulted_node_index1: Optional[int] = None
+        self._faulted_node_index2: Optional[int] = None
+        self._Zf: Union[float, complex] = 0.0
+        self._If_012: Optional[np.ndarray] = None
+    
     def set_faulted_node(
         self, 
         node_ID: str, 
@@ -166,11 +171,15 @@ class UnSymmetricalFault(ABC):
         """
         self._faulted_node_ID = node_ID
 
-        self._faulted_node_index_0 = self._network_0.get_node_index(node_ID)
-        self._faulted_node_index_1 = self._network_1.get_node_index(node_ID)
-        self._faulted_node_index_2 = self._network_2.get_node_index(node_ID)
+        if self._nw0 is not None:
+            self._faulted_node_index0 = self._nw0.get_node_index(node_ID)
+        else:
+            self._faulted_node_index0 = None
+        
+        self._faulted_node_index1 = self._nw1.get_node_index(node_ID)
+        self._faulted_node_index2 = self._nw2.get_node_index(node_ID)
 
-        self._Z_f = Z_fault
+        self._Zf = Z_fault
 
     @abstractmethod
     def get_fault_current_012(self) -> np.ndarray:
@@ -193,18 +202,24 @@ class UnSymmetricalFault(ABC):
         """
         Returns the sequence voltage components of the given network node.
         """
-        k0 = self._faulted_node_index_0
-        k1 = self._faulted_node_index_1
-        k2 = self._faulted_node_index_2
-        node = self._network_1.get_node(ID)
+        k0 = self._faulted_node_index0
+        k1 = self._faulted_node_index1
+        k2 = self._faulted_node_index2
+        node = self._nw1.get_node(ID)
         i = node.index
-        Z_ik_0 = self._network_0.get_matrix_element(i, k0)
-        Z_ik_1 = self._network_1.get_matrix_element(i, k1)
-        Z_ik_2 = self._network_2.get_matrix_element(i, k2)
-        Z_ik_012 = np.diagflat([Z_ik_0, Z_ik_1, Z_ik_2])
-        if self._I_f_012 is None:
+        
+        if self._nw0 is not None:
+            Z_ik0 = self._nw0.get_matrix_element(i, k0)
+        else:
+            Z_ik0 = 0.0
+        
+        Z_ik1 = self._nw1.get_matrix_element(i, k1)
+        Z_ik2 = self._nw2.get_matrix_element(i, k2)
+        
+        Z_ik_012 = np.diagflat([Z_ik0, Z_ik1, Z_ik2])
+        if self._If_012 is None:
             self.get_fault_current_012()
-        dU_012 = np.matmul(Z_ik_012, self._I_f_012)
+        dU_012 = np.matmul(Z_ik_012, self._If_012)
         U_pre_012 = np.array([[0.0, self._U_phase, 0.0]]).transpose()
         U_012 = U_pre_012 - dU_012
         return U_012
@@ -225,17 +240,23 @@ class UnSymmetricalFault(ABC):
         """
         Returns the sequence components of the current in the specified branch.
         """
-        branch_1 = self._network_1.get_branch(ID)
+        branch_1 = self._nw1.get_branch(ID)
         i = branch_1.start_node.index
-        branch_2 = self._network_2.get_branch((branch_1.start_node.ID, branch_1.end_node.ID))
-        branch_0 = self._network_0.get_branch((branch_1.start_node.ID, branch_1.end_node.ID))
-        Z_b_0 = branch_0.impedance
-        Z_b_1 = branch_1.impedance
-        Z_b_2 = branch_2.impedance
-        Y_b_0 = 1 / Z_b_0
-        Y_b_1 = 1 / Z_b_1
-        Y_b_2 = 1 / Z_b_2
-        Y_b_012 = np.diagflat([Y_b_0, Y_b_1, Y_b_2])
+        branch_2 = self._nw2.get_branch((branch_1.start_node.ID, branch_1.end_node.ID))
+
+        Z_b1 = branch_1.impedance
+        Z_b2 = branch_2.impedance
+        Y_b1 = 1 / Z_b1
+        Y_b2 = 1 / Z_b2
+        
+        if self._nw0 is not None:
+            branch_0 = self._nw0.get_branch((branch_1.start_node.ID, branch_1.end_node.ID))
+            Z_b0 = branch_0.impedance
+            Y_b0 = 1 / Z_b0
+        else:
+            Y_b0 = float('inf')
+        
+        Y_b_012 = np.diagflat([Y_b0, Y_b1, Y_b2])
         if i == REF_NODE_INDEX:
             if branch_1.has_source:
                 U_i_012 = np.array([[0.0, self._U_phase, 0.0]]).transpose()
@@ -267,7 +288,7 @@ class UnSymmetricalFault(ABC):
         First element of the tuples are the ID of the node on the other end of
         the branch.
         """
-        node = self._network_1.get_node(ID)
+        node = self._nw1.get_node(ID)
         currents_to_node = []
         for branch in node.incoming:
             other_node = branch.start_node
@@ -283,48 +304,51 @@ class UnSymmetricalFault(ABC):
 class LineToGroundFault(UnSymmetricalFault):
 
     def get_fault_current_012(self) -> np.ndarray:
-        k0 = self._faulted_node_index_0
-        k1 = self._faulted_node_index_1
-        k2 = self._faulted_node_index_2
-        Z_kk_0 = self._network_0.get_matrix_element(k0, k0)
-        Z_kk_1 = self._network_1.get_matrix_element(k1, k1)
-        Z_kk_2 = self._network_2.get_matrix_element(k2, k2)
-        I_f_0 = I_f_1 = I_f_2 = self._U_phase / (3.0 * self._Z_f + Z_kk_0 + Z_kk_1 + Z_kk_2)
-        self._I_f_012 = np.array([[I_f_0, I_f_1, I_f_2]]).transpose()
-        return self._I_f_012
+        k0 = self._faulted_node_index0
+        k1 = self._faulted_node_index1
+        k2 = self._faulted_node_index2
+
+        Z_kk0 = self._nw0.get_matrix_element(k0, k0)
+        Z_kk1 = self._nw1.get_matrix_element(k1, k1)
+        Z_kk2 = self._nw2.get_matrix_element(k2, k2)
+
+        If0 = If1 = If2 = self._U_phase / (3.0 * self._Zf + Z_kk0 + Z_kk1 + Z_kk2)
+        self._If_012 = np.array([[If0, If1, If2]]).transpose()
+        return self._If_012
 
 
 class LineToLineFault(UnSymmetricalFault):
 
     def get_fault_current_012(self) -> np.ndarray:
-        k1 = self._faulted_node_index_1
-        k2 = self._faulted_node_index_2
-        Z_kk_1 = self._network_1.get_matrix_element(k1, k1)
-        Z_kk_2 = self._network_2.get_matrix_element(k2, k2)
-        I_f_0 = 0.0
-        I_f_1 = self._U_phase / (Z_kk_1 + Z_kk_2 + self._Z_f)
-        I_f_2 = -I_f_1
-        self._I_f_012 = np.array([[I_f_0, I_f_1, I_f_2]]).transpose()
-        return self._I_f_012
+        k1 = self._faulted_node_index1
+        k2 = self._faulted_node_index2
+        Z_kk1 = self._nw1.get_matrix_element(k1, k1)
+        Z_kk2 = self._nw2.get_matrix_element(k2, k2)
+        If0 = 0.0
+        If1 = self._U_phase / (Z_kk1 + Z_kk2 + self._Zf)
+        If2 = -If1
+        self._If_012 = np.array([[If0, If1, If2]]).transpose()
+        return self._If_012
 
 
 class DoubleLineToGroundFault(UnSymmetricalFault):
 
     def get_fault_current_012(self) -> np.ndarray:
-        k0 = self._faulted_node_index_0
-        k1 = self._faulted_node_index_1
-        k2 = self._faulted_node_index_2
-        Z_kk_0 = self._network_0.get_matrix_element(k0, k0)
-        Z_kk_1 = self._network_1.get_matrix_element(k1, k1)
-        Z_kk_2 = self._network_2.get_matrix_element(k2, k2)
+        k0 = self._faulted_node_index0
+        k1 = self._faulted_node_index1
+        k2 = self._faulted_node_index2
 
-        Z_series = Z_kk_0 + 3 * self._Z_f
-        Z_parallel = Z_kk_2 * Z_series / (Z_kk_2 + Z_series)
-        Z = Z_kk_1 + Z_parallel
+        Z_kk0 = self._nw0.get_matrix_element(k0, k0)
+        Z_kk1 = self._nw1.get_matrix_element(k1, k1)
+        Z_kk2 = self._nw2.get_matrix_element(k2, k2)
 
-        I_f_1 = self._U_phase / Z
-        I_f_2 = Z_series / (Z_kk_2 + Z_series) * (-I_f_1)
-        I_f_0 = Z_kk_2 / (Z_kk_2 + Z_series) * (-I_f_1)
+        Z_series = Z_kk0 + 3 * self._Zf
+        Z_parallel = Z_kk2 * Z_series / (Z_kk2 + Z_series)
+        Z = Z_kk1 + Z_parallel
 
-        self._I_f_012 = np.array([[I_f_0, I_f_1, I_f_2]]).transpose()
-        return self._I_f_012
+        If1 = self._U_phase / Z
+        If2 = Z_series / (Z_kk2 + Z_series) * (-If1)
+        If0 = Z_kk2 / (Z_kk2 + Z_series) * (-If1)
+
+        self._If_012 = np.array([[If0, If1, If2]]).transpose()
+        return self._If_012

@@ -6,7 +6,7 @@ from typing import Type, TypeVar
 
 from python_electric import Quantity
 
-__all__ = ["Bus", "Connection", "Component", "Network", "TComponent"]
+__all__ = ["Bus", "Connection", "Component", "NetworkGraph", "TComponent"]
 
 
 @dataclass(slots=True)
@@ -70,13 +70,13 @@ class Component(ABC):
 TComponent = TypeVar("TComponent", bound=Component)
 
 
-class Network:
+class NetworkGraph:
     """
     Aggregate root. This class owns:
     - all busses
     - all connections
 
-    Users should construct the model via Network methods.
+    Users should construct the model via NetworkGraph methods.
     """
     GROUND_ID = "ground"
 
@@ -86,7 +86,7 @@ class Network:
         self._connections: dict[str, Connection] = {}
 
     @classmethod
-    def create(cls, name: str) -> Network:
+    def create(cls, name: str) -> NetworkGraph:
         return cls(name=name)
 
     @property

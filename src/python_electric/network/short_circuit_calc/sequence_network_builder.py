@@ -43,7 +43,6 @@ This MVP implementation:
 -   Adds all bus->ground shunts first (to seed the BFS).
 -   Adds bus->bus series branches afterward where Z0 transfer exists.
 """
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -54,18 +53,23 @@ import logging
 from ... import Quantity
 from ...short_circuit.network.per_unit import PerUnitSystem
 from ...short_circuit.network import Network as SCNetwork
-from ..network import Network, Connection, Component
+from ..graph import NetworkGraph, Connection, Component
 from ..config import SCCalcConfig
 from ..components import Transformer
 
-Sequence = Literal[0, 1, 2]
-
 __all__ = [
-    "Sequence",
     "build_sequence_network",
+    "MissingConnectionError"
 ]
 
+
 logger = logging.getLogger(__name__)
+
+
+Sequence = Literal[0, 1, 2]
+
+class MissingConnectionError(Exception):
+    pass
 
 
 # ------------------------------------------------------------------------------
@@ -244,7 +248,7 @@ def u_base_for_component(comp: Any, *, default_u: Quantity | None) -> Quantity |
 
 
 def infer_bus_u_base(
-    nw: Network,
+    nw: NetworkGraph,
     *,
     bus_u_base_from_object: Callable[[Any], Quantity | None] = default_bus_u_base_from_object,
 ) -> dict[str, Quantity]:
@@ -464,8 +468,507 @@ def _grounded_neutral_impedance(trafo: Transformer, side: str) -> Quantity | Non
 # Builder implementation
 # ------------------------------------------------------------------------------
 
+class SequenceNetworkBuilder:
+    """
+    Builder object for sequence short-circuit networks.
+
+    This class is a readability-focused refactor of the original
+    build_sequence_network(...) function. Behavior is intended to be identical.
+    """
+    def __init__(
+        self,
+        nwgraph: NetworkGraph,
+        *,
+        sequence: Sequence,
+        config: SCCalcConfig | None = None,
+        # hooks:
+        get_Z_ohm: Callable[[Any], Quantity] | None = None,
+        is_source_component: Callable[[Any], bool] | None = None,
+        bus_u_base: dict[str, Quantity] | None = None,
+    ) -> None:
+        self.nwgraph = nwgraph
+        self.sequence = sequence
+        self.cfg = config or SCCalcConfig()
+
+        # Wrap hooks so they can see cfg/sequence without changing their
+        # signature outside.
+        self._get_Z_ohm = get_Z_ohm or (
+            lambda comp: default_get_Z_ohm(
+                comp,
+                sequence=self.sequence,
+                cfg=self.cfg
+            )
+        )
+        self._is_source = is_source_component or (
+            lambda comp: default_is_source_component(
+                comp,
+                sequence=self.sequence,
+                cfg=self.cfg
+            )
+        )
+
+        self.ground = self.nwgraph.GROUND_ID
+
+        # incidence map: bus_id -> list of conn_id
+        self.incidence: dict[str, list[str]] = self._build_incidence()
+
+        if self.ground not in self.incidence:
+            raise ValueError(
+                f"GROUND_ID={self.ground!r} is not present "
+                f"in network busses/incidence map."
+            )
+
+        # Determine U_base per bus
+        self.U_base = bus_u_base or infer_bus_u_base(self.nwgraph)
+
+        # The short-circuit network instance we are building
+        self.nw_seq = SCNetwork()
+
+        # Build-engine state
+        self.processed_connections: set[str] = set()
+        self.added_shunts: set[tuple[str, str]] = set()  # (conn_id, bus_id) to avoid duplicate shunts
+
+        self.visited_buses: set[str] = {self.ground}
+        self.queue: list[str] = []
+
+    # --------------------------------------------------------------------------
+    # Public API
+    # --------------------------------------------------------------------------
+
+    def build(self) -> SCNetwork:
+        """Build and return the sequence Zbus short-circuit network."""
+        if self.sequence in (1, 2):
+            self._seed_seq12_from_ground()
+        else:
+            self._seed_seq0_from_ground_shunts()
+
+        self._bfs_expand()
+
+        self._assert_all_connections_processed()
+
+        # Optional: add induction motor source branches ground->bus (sequence=1 only).
+        if self.sequence == 1 and self.cfg.include_induction_motor_sources:
+            self._add_induction_motor_sources()
+
+        return self.nw_seq
+
+    # --------------------------------------------------------------------------
+    # Build engine
+    # --------------------------------------------------------------------------
+
+    def _seed_seq12_from_ground(self) -> None:
+        """Seed BFS by adding all ground-touching branches for sequence 1/2."""
+        root_conns: list[str] = []
+        for conn_id, conn in self.nwgraph.connections.items():
+            a = bus_id_of(conn.start)
+            b = bus_id_of(conn.end)
+            if a == self.ground or b == self.ground:
+                root_conns.append(conn_id)
+
+        # Add all ground-touching connections first
+        for conn_id in root_conns:
+            conn = self.nwgraph.connections[conn_id]
+            a = bus_id_of(conn.start)
+            b = bus_id_of(conn.end)
+
+            if a == self.ground and b == self.ground:
+                self.processed_connections.add(conn_id)
+                continue
+
+            non_ground_bus = b if a == self.ground else a
+
+            Z_pu = self._z_pu_of_connection(conn, prefer_bus=non_ground_bus)
+            self._add_branchspec(
+                BranchSpec(
+                    Z_pu=Z_pu,
+                    start=None,
+                    end=non_ground_bus,
+                    has_source=self._conn_has_source(conn),
+                )
+            )
+            self.processed_connections.add(conn_id)
+
+            if non_ground_bus not in self.visited_buses:
+                self.visited_buses.add(non_ground_bus)
+                self.queue.append(non_ground_bus)
+
+    def _seed_seq0_from_ground_shunts(self) -> None:
+        """
+        Sequence=0: add all grounding shunts (bus->ground) first, to seed BFS.
+
+        If no grounding reference exists (no shunts found), Z0 Zbus is
+        ill-defined.
+        """
+        for conn_id, conn in self.nwgraph.connections.items():
+            u = bus_id_of(conn.start)
+            v = bus_id_of(conn.end)
+
+            for bs in self._emit_branches(conn, u, v):
+                bs = canonicalize_branch(bs)
+
+                if is_ground_branch(bs):
+                    # Pre-seed only with ground branches.
+                    if bs.end is None:
+                        continue  # degenerate, should not happen
+
+                    key = (conn_id, bs.end)
+                    if key in self.added_shunts:
+                        continue
+
+                    self._add_branchspec(bs)
+                    self.added_shunts.add(key)
+
+                    if bs.end not in self.visited_buses:
+                        self.visited_buses.add(bs.end)
+                        self.queue.append(bs.end)
+
+            # If this connection emits no series branch (delta-blocked etc.),
+            # we will mark it as "done" later during BFS when encountered from a
+            # visited bus. We do NOT mark it here because the series branch may
+            # still exist.
+
+        non_ground_busses = [
+            b for b in self.nwgraph.busses.keys()
+            if b != self.ground
+        ]
+        if non_ground_busses and not self.queue:
+            raise ValueError(
+                "Cannot build Z0 network: no grounding paths "
+                "(bus->ground shunts) were found. Provide transformer "
+                "neutral grounding (YN + Zn) or other grounding components."
+            )
+
+    def _bfs_expand(self) -> None:
+        """BFS expansion for all sequences."""
+        while self.queue:
+            u = self.queue.pop(0)
+
+            for conn_id in self.incidence.get(u, []):
+                if conn_id in self.processed_connections:
+                    continue
+
+                conn = self.nwgraph.connections[conn_id]
+                v = other_bus_id(conn, u)
+
+                branches = self._emit_branches(conn, u, v)
+
+                # 1) Add ground branches (shunts) first (avoid duplicates).
+                for bs in branches:
+                    bs = canonicalize_branch(bs)
+
+                    if is_ground_branch(bs):
+                        if bs.end is None:
+                            continue
+
+                        key = (conn_id, bs.end)
+                        if key in self.added_shunts:
+                            continue
+
+                        self._add_branchspec(bs)
+                        self.added_shunts.add(key)
+
+                        if bs.end not in self.visited_buses:
+                            self.visited_buses.add(bs.end)
+                            self.queue.append(bs.end)
+
+                # 2) Add the series branch (if any) to expand the graph.
+                series_branches = [
+                    canonicalize_branch(bs) for bs in branches
+                    if not is_ground_branch(bs)
+                ]
+                if not series_branches:
+                    # No series topology contribution (e.g. delta-blocked
+                    # without transfer).
+                    self.processed_connections.add(conn_id)
+                    continue
+
+                # For MVP, we expect at most one series branch per connection.
+                if len(series_branches) > 1:
+                    raise ValueError(
+                        "Internal error: expected at most one series branch per "
+                        f"connection. Got {len(series_branches)} for connection "
+                        f"{conn_id!r}."
+                    )
+
+                bs = series_branches[0]
+                self._add_branchspec(bs)
+                self.processed_connections.add(conn_id)
+
+                if v not in self.visited_buses:
+                    self.visited_buses.add(v)
+                    self.queue.append(v)
+
+    def _assert_all_connections_processed(self) -> None:
+        missing = set(self.nwgraph.connections.keys()) - self.processed_connections
+        if missing:
+            raise MissingConnectionError(
+                "Not all connections could be added to the short-circuit network. "
+                "Likely the network has a disconnected island not connected to the "
+                "reference (GROUND) or no grounding exists for Z0. "
+                f"Missing connections: {sorted(missing)}"
+            )
+
+    # --------------------------------------------------------------------------
+    # SCNetwork write helpers
+    # --------------------------------------------------------------------------
+
+    def _add_branchspec(self, bs: BranchSpec) -> None:
+        """Add a branch described by BranchSpec."""
+        logger.debug(
+            f"Add branch {bs.start}->{bs.end} with Z_pu = {bs.Z_pu:.3g} "
+            f"to Z{self.sequence}-network."
+        )
+
+        self.nw_seq.add_branch(
+            bs.Z_pu,
+            start_node_ID=bs.start,
+            end_node_ID=bs.end,
+            has_source=bs.has_source
+        )
+
+    # --------------------------------------------------------------------------
+    # Branch emission
+    # --------------------------------------------------------------------------
+
+    def _emit_branches(
+        self,
+        conn: Connection,
+        u: str,
+        v: str
+    ) -> list[BranchSpec]:
+        if self.sequence in (1, 2):
+            return self._emit_branches_seq12(conn, u, v)
+        return self._emit_branches_seq0(conn, u, v)
+
+    def _emit_branches_seq12(
+        self,
+        conn: Connection,
+        u: str,
+        v: str
+    ) -> list[BranchSpec]:
+        """
+        Emit branches for sequence 1/2.
+
+        For sequence=1:
+          - ground-touching connections may carry sources (has_source=True).
+        For sequence=2:
+          - sources are omitted by default policy (has_source=False).
+        """
+        Z_pu = self._z_pu_of_connection(conn, prefer_bus=u)
+        return [
+            BranchSpec(
+                Z_pu=Z_pu,
+                start=to_sc_node_id(u, self.ground),
+                end=to_sc_node_id(v, self.ground),
+                has_source=False,
+            )
+        ]
+
+    def _emit_branches_seq0(
+        self,
+        conn: Connection,
+        u: str,
+        v: str
+    ) -> list[BranchSpec]:
+        """
+        Emit branches for zero-sequence (sequence=0).
+
+        Logic (MVP):
+        -   If no transformer in the connection: emit a normal series branch
+            u-v with Z0.
+        -   If one transformer exists:
+            *   If any delta winding exists -> no series transfer branch.
+            *   If no delta -> emit series branch u-v with Z0.
+            *   Additionally, if a side has grounded neutral (YN + Zn), emit
+                shunt branch (ground -> bus).
+        """
+        transformers = _find_transformers(conn)
+        if not transformers:
+            Z_pu = self._z_pu_of_connection(conn, prefer_bus=u)
+            return [BranchSpec(
+                Z_pu=Z_pu,
+                start=to_sc_node_id(u, self.ground),
+                end=to_sc_node_id(v, self.ground))
+            ]
+
+        if len(transformers) > 1:
+            raise ValueError(
+                "Z0 builder MVP supports at most one Transformer per Connection. "
+                f"Found {len(transformers)} transformers in connection between "
+                f"{u!r} and {v!r}."
+            )
+
+        trafo = transformers[0]
+
+        pri_bus, sec_bus = _map_busses_to_transformer_sides(trafo, u, v, U_base=self.U_base)
+        blocks_transfer = _trafo_blocks_z0_transfer(trafo)
+
+        branches: list[BranchSpec] = []
+
+        if not blocks_transfer:
+            Z_pu = self._z_pu_of_connection(conn, prefer_bus=u)
+            branches.append(BranchSpec(
+                Z_pu=Z_pu,
+                start=to_sc_node_id(u, self.ground),
+                end=to_sc_node_id(v, self.ground))
+            )
+
+        Zn_pri = _grounded_neutral_impedance(trafo, "pri")
+        if Zn_pri is not None:
+            Z_sh = self._z0_shunt_pu_for_side(conn, trafo, side_bus=pri_bus, Zn=Zn_pri)
+            branches.append(BranchSpec(Z_pu=Z_sh, start=None, end=pri_bus))
+
+        Zn_sec = _grounded_neutral_impedance(trafo, "sec")
+        if Zn_sec is not None:
+            Z_sh = self._z0_shunt_pu_for_side(conn, trafo, side_bus=sec_bus, Zn=Zn_sec)
+            branches.append(BranchSpec(Z_pu=Z_sh, start=None, end=sec_bus))
+
+        return branches
+
+    # --------------------------------------------------------------------------
+    # Electrical utilities
+    # --------------------------------------------------------------------------
+
+    def _build_incidence(self) -> dict[str, list[str]]:
+        incidence: dict[str, list[str]] = {
+            bus_id: [] for bus_id
+            in self.nwgraph.busses.keys()
+        }
+        for conn_id, conn in self.nwgraph.connections.items():
+            a = bus_id_of(conn.start)
+            b = bus_id_of(conn.end)
+            incidence.setdefault(a, []).append(conn_id)
+            incidence.setdefault(b, []).append(conn_id)
+        return incidence
+
+    @staticmethod
+    def _has_transformer(conn: Connection) -> bool:
+        return any(
+            comp.__class__.__name__ == "Transformer"
+            for comp in conn.components.values()
+        )
+
+    def _z_pu_of_connection(
+        self,
+        conn: Connection,
+        *,
+        prefer_bus: str | None = None
+    ) -> complex:
+        """
+        Compute total sequence impedance (pu) of a Connection by summing
+        per-component impedances.
+
+        When a transformer exists, conversion is done per component using
+        u_base_for_component(). prefer_bus is used as a fallback to select a
+        default U_base when endpoints have different U_base.
+        """
+        a = bus_id_of(conn.start)
+        b = bus_id_of(conn.end)
+
+        if a == self.ground and b != self.ground:
+            U_conn = self.U_base[b]
+        elif b == self.ground and a != self.ground:
+            U_conn = self.U_base[a]
+        else:
+            Ua = self.U_base[a].to("V").m
+            Ub = self.U_base[b].to("V").m
+            if abs(Ua - Ub) / max(Ua, Ub, 1.0) > 1e-6 and not self._has_transformer(conn):
+                raise ValueError(
+                    "Connection links two different voltage levels but has no "
+                    f"Transformer. Got {self.U_base[a]} vs {self.U_base[b]} for "
+                    f"endpoints {a!r}-{b!r}."
+                )
+            U_conn = self.U_base[prefer_bus] if (prefer_bus is not None) else self.U_base[a]
+
+        z_total: complex = 0 + 0j
+        for comp in conn.components.values():
+            if self.cfg.ignore_induction_motors_in_branch_Z and comp.__class__.__name__ == "InductionMotor":
+                continue
+            Z_ohm = self._get_Z_ohm(comp)
+            U_comp = u_base_for_component(comp, default_u=U_conn) or U_conn
+            z_total += ohm_to_pu(Z_ohm, S_base=self.cfg.S_base, U_base=U_comp)
+        return z_total
+
+    def _conn_has_source(self, conn: Connection) -> bool:
+        """
+        Source modeling policy:
+        - Only for sequence=1 (positive)
+        - Typically only on ground-touching branches
+        """
+        if self.sequence != 1:
+            return False
+        a = bus_id_of(conn.start)
+        b = bus_id_of(conn.end)
+        if not (a == self.ground or b == self.ground):
+            return False
+        return any(self._is_source(comp) for comp in conn.components.values())
+
+    def _z0_shunt_pu_for_side(
+        self,
+        conn: Connection,
+        trafo: Transformer,
+        *,
+        side_bus: str,
+        Zn: Quantity
+    ) -> complex:
+        """
+        Compute a Z0 shunt impedance (pu) from side_bus to ground.
+
+        MVP approximation:
+        -   Include Z0 of transformer.
+        -   Include 3 * Zn (neutral grounding impedance contribution in zero-sequence).
+        -   Include other non-transformer components in the same Connection that
+            are on the same voltage level as side_bus (based on U_base matching).
+
+        This yields a pragmatic "bus -> ground" branch impedance.
+        """
+        z_total: complex = 0 + 0j
+        U_side = self.U_base[side_bus]
+
+        # 1) Transformer Z0 contribution (always included)
+        Z0_ohm = self._get_Z_ohm(trafo)
+        U_trafo = u_base_for_component(trafo, default_u=U_side) or U_side
+        z_total += ohm_to_pu(Z0_ohm, S_base=self.cfg.S_base, U_base=U_trafo)
+
+        # 2) Grounding impedance contribution: 3 * Zn
+        z_total += ohm_to_pu(3.0 * Zn, S_base=self.cfg.S_base, U_base=U_side)
+
+        # 3) Add other components on the same voltage side (optional MVP behavior)
+        for comp in conn.components.values():
+            if comp is trafo:
+                continue
+            if self.cfg.ignore_induction_motors_in_branch_Z and comp.__class__.__name__ == "InductionMotor":
+                continue
+
+            U_comp = u_base_for_component(comp, default_u=None)
+            if U_comp is None or _is_same_voltage(U_comp, U_side):
+                Zc_ohm = self._get_Z_ohm(comp)
+                Uc = U_comp or U_side
+                z_total += ohm_to_pu(Zc_ohm, S_base=self.cfg.S_base, U_base=Uc)
+
+        return z_total
+
+    def _add_induction_motor_sources(self) -> None:
+        for conn in self.nwgraph.connections.values():
+            a = bus_id_of(conn.start)
+            b = bus_id_of(conn.end)
+            terminal_bus = a if a != self.ground else (b if b != self.ground else None)
+            if terminal_bus is None:
+                continue
+
+            for comp in conn.components.values():
+                if comp.__class__.__name__ != "InductionMotor":
+                    continue
+                if not self._is_source(comp):
+                    continue
+
+                Z_ohm = self._get_Z_ohm(comp)
+                Z_pu = ohm_to_pu(Z_ohm, S_base=self.cfg.S_base, U_base=self.U_base[terminal_bus])
+                self._add_branchspec(BranchSpec(Z_pu=Z_pu, start=None, end=terminal_bus, has_source=True))
+
+
 def build_sequence_network(
-    nw: Network,
+    nwgraph: NetworkGraph,
     *,
     sequence: Sequence,
     config: SCCalcConfig | None = None,
@@ -479,8 +982,8 @@ def build_sequence_network(
 
     Parameters
     ----------
-    nw:
-        The python-electric Network (busses + connections + components).
+    nwgraph:
+        Network graph (busses + connections + components).
     sequence:
         1=positive, 2=negative, 0=zero.
     config:
@@ -508,452 +1011,14 @@ def build_sequence_network(
     SCNetwork
         A short-circuit network with branches added in a valid order.
     """
-    cfg = config or SCCalcConfig()
-
-    # Wrap hooks so they can see cfg/sequence without changing their signature outside.
-    _get_Z_ohm = get_Z_ohm or (lambda comp: default_get_Z_ohm(comp, sequence=sequence, cfg=cfg))
-    _is_source = is_source_component or (
-        lambda comp: default_is_source_component(comp, sequence=sequence, cfg=cfg)
-    )
-
-    ground = nw.GROUND_ID
-
-    # 1) incidence map: bus_id -> list of conn_id
-    incidence: dict[str, list[str]] = {bus_id: [] for bus_id in nw.busses.keys()}
-    for conn_id, conn in nw.connections.items():
-        a = bus_id_of(conn.start)
-        b = bus_id_of(conn.end)
-        incidence.setdefault(a, []).append(conn_id)
-        incidence.setdefault(b, []).append(conn_id)
-
-    if ground not in incidence:
-        raise ValueError(
-            f"GROUND_ID={ground!r} is not present in network busses/incidence map."
-        )
-
-    # 2) Determine U_base per bus
-    U_base = bus_u_base or infer_bus_u_base(nw)
-
-    # 3) Create the short-circuit network instance
-    nw_seq = SCNetwork()
-
-    def add_branchspec(bs: BranchSpec) -> None:
-        """Add a branch described by BranchSpec."""
-        logger.debug(
-            f"Add branch {bs.start}->{bs.end} with Z_pu = {bs.Z_pu:.3g} "
-            f"to Z{sequence}-network.")
-
-        nw_seq.add_branch(
-            bs.Z_pu,
-            start_node_ID=bs.start,
-            end_node_ID=bs.end,
-            has_source=bs.has_source
-        )
-
-    def has_transformer(conn: Connection) -> bool:
-        return any(comp.__class__.__name__ == "Transformer"
-                   for comp in conn.components.values())
-
-    def z_pu_of_connection(
-        conn: Connection,
-        *,
-        prefer_bus: str | None = None
-    ) -> complex:
-        """
-        Compute total sequence impedance (pu) of a Connection by summing
-        per-component impedances.
-
-        When a transformer exists, conversion is done per component using
-        u_base_for_component(). prefer_bus is used as a fallback to select a
-        default U_base when endpoints have different U_base.
-        """
-        a = bus_id_of(conn.start)
-        b = bus_id_of(conn.end)
-
-        # Choose a fallback base voltage for the connection.
-        if a == ground and b != ground:
-            U_conn = U_base[b]
-        elif b == ground and a != ground:
-            U_conn = U_base[a]
-        else:
-            # If endpoints are on different voltage levels, require a
-            # transformer.
-            Ua = U_base[a].to("V").m
-            Ub = U_base[b].to("V").m
-            if abs(Ua - Ub) / max(Ua, Ub, 1.0) > 1e-6 and not has_transformer(conn):
-                raise ValueError(
-                    "Connection links two different voltage levels but has no "
-                    f"Transformer. Got {U_base[a]} vs {U_base[b]} for endpoints "
-                    f"{a!r}-{b!r}."
-                )
-            U_conn = U_base[prefer_bus] if (prefer_bus is not None) else U_base[a]
-
-        z_total: complex = 0 + 0j
-        for comp in conn.components.values():
-            if (cfg.ignore_induction_motors_in_branch_Z
-                    and comp.__class__.__name__ == "InductionMotor"):
-                continue
-            Z_ohm = _get_Z_ohm(comp)
-            U_comp = u_base_for_component(comp, default_u=U_conn) or U_conn
-            z_total += ohm_to_pu(Z_ohm, S_base=cfg.S_base, U_base=U_comp)
-        return z_total
-
-    def conn_has_source(conn: Connection) -> bool:
-        """
-        Source modeling policy:
-        - Only for sequence=1 (positive)
-        - Typically only on ground-touching branches
-        """
-        if sequence != 1:
-            return False
-        a = bus_id_of(conn.start)
-        b = bus_id_of(conn.end)
-        if not (a == ground or b == ground):
-            return False
-        return any(_is_source(comp) for comp in conn.components.values())
-
-    # --------------------------------------------------------------------------
-    # Branch emission
-    # --------------------------------------------------------------------------
-
-    def emit_branches_seq12(
-        conn: Connection,
-        u: str,
-        v: str
-    ) -> list[BranchSpec]:
-        """
-        Emit branches for sequence 1/2.
-
-        For sequence=1:
-          - ground-touching connections may carry sources (has_source=True).
-        For sequence=2:
-          - sources are omitted by default policy (has_source=False).
-        """
-        Z_pu = z_pu_of_connection(conn, prefer_bus=u)
-        return [
-            BranchSpec(
-                Z_pu=Z_pu,
-                start=to_sc_node_id(u, ground),
-                end=to_sc_node_id(v, ground),
-                has_source=False,
-            )
-        ]
-
-    def z0_shunt_pu_for_side(
-        conn: Connection,
-        trafo: Transformer,
-        *,
-        side_bus: str,
-        Zn: Quantity
-    ) -> complex:
-        """
-        Compute a Z0 shunt impedance (pu) from side_bus to ground.
-
-        MVP approximation:
-        -   Include Z0 of transformer.
-        -   Include 3 * Zn (neutral grounding impedance contribution in
-            zero-sequence).
-        -   Include other non-transformer components in the same Connection that
-            are on the same voltage level as side_bus (based on U_base matching).
-
-        This yields a pragmatic "bus -> ground" branch impedance.
-        """
-        # We will build the shunt impedance as sum of per-component impedances
-        # in pu.
-        z_total: complex = 0 + 0j
-
-        U_side = U_base[side_bus]
-
-        # 1) Transformer Z0 contribution (always included)
-        Z0_ohm = _get_Z_ohm(trafo)  # sequence already bound to 0 by the caller hook
-        U_trafo = u_base_for_component(trafo, default_u=U_side) or U_side
-        z_total += ohm_to_pu(Z0_ohm, S_base=cfg.S_base, U_base=U_trafo)
-
-        # 2) Grounding impedance contribution: 3 * Zn
-        z_total += ohm_to_pu(3.0 * Zn, S_base=cfg.S_base, U_base=U_side)
-
-        # 3) Add other components on the same voltage side (optional MVP behavior)
-        for comp in conn.components.values():
-            if comp is trafo:
-                continue
-            if cfg.ignore_induction_motors_in_branch_Z and comp.__class__.__name__ == "InductionMotor":
-                continue
-
-            U_comp = u_base_for_component(comp, default_u=None)
-            # If we cannot determine a voltage for the component, we
-            # conservatively include it.
-            if U_comp is None or _is_same_voltage(U_comp, U_side):
-                Zc_ohm = _get_Z_ohm(comp)
-                Uc = U_comp or U_side
-                z_total += ohm_to_pu(Zc_ohm, S_base=cfg.S_base, U_base=Uc)
-
-        return z_total
-
-    def emit_branches_seq0(conn: Connection, u: str, v: str) -> list[BranchSpec]:
-        """
-        Emit branches for zero-sequence (sequence=0).
-
-        Logic (MVP):
-        -   If no transformer in the connection: emit a normal series branch
-            u-v with Z0.
-        -   If one transformer exists:
-            *   If any delta winding exists -> no series transfer branch.
-            *   If no delta -> emit series branch u-v with Z0.
-            *   Additionally, if a side has grounded neutral (YN + Zn), emit
-                shunt branch (ground -> bus).
-        """
-        transformers = _find_transformers(conn)
-        if not transformers:
-            Z_pu = z_pu_of_connection(conn, prefer_bus=u)
-            return [BranchSpec(
-                Z_pu=Z_pu,
-                start=to_sc_node_id(u, ground),
-                end=to_sc_node_id(v, ground))
-            ]
-
-        if len(transformers) > 1:
-            raise ValueError(
-                "Z0 builder MVP supports at most one Transformer per Connection. "
-                f"Found {len(transformers)} transformers in connection between "
-                f"{u!r} and {v!r}."
-            )
-
-        trafo = transformers[0]
-        # Determine which endpoint is primary/secondary for side-specific
-        # grounding.
-        pri_bus, sec_bus = _map_busses_to_transformer_sides(trafo, u, v, U_base=U_base)
-
-        blocks_transfer = _trafo_blocks_z0_transfer(trafo)
-
-        branches: list[BranchSpec] = []
-
-        # Emit series transfer branch only if not blocked by delta.
-        if not blocks_transfer:
-            Z_pu = z_pu_of_connection(conn, prefer_bus=u)
-            branches.append(BranchSpec(
-                Z_pu=Z_pu,
-                start=to_sc_node_id(u, ground),
-                end=to_sc_node_id(v, ground))
-            )
-
-        # Emit shunt(s) if grounded neutrals exist.
-        Zn_pri = _grounded_neutral_impedance(trafo, "pri")
-        if Zn_pri is not None:
-            Z_sh = z0_shunt_pu_for_side(conn, trafo, side_bus=pri_bus, Zn=Zn_pri)
-            branches.append(BranchSpec(
-                Z_pu=Z_sh,
-                start=None,
-                end=pri_bus)
-            )
-
-        Zn_sec = _grounded_neutral_impedance(trafo, "sec")
-        if Zn_sec is not None:
-            Z_sh = z0_shunt_pu_for_side(conn, trafo, side_bus=sec_bus, Zn=Zn_sec)
-            branches.append(BranchSpec(
-                Z_pu=Z_sh,
-                start=None,
-                end=sec_bus)
-            )
-
-        # If transfer is blocked and no shunts exist, the connection contributes
-        # nothing to Z0 topology.
-        return branches
-
-    # Choose emitter
-    if sequence in (1, 2):
-        emitter = emit_branches_seq12
-    else:
-        emitter = emit_branches_seq0
-
-    # --------------------------------------------------------------------------
-    # Build engine
-    # --------------------------------------------------------------------------
-
-    added_series_conns: set[str] = set()
-    added_shunts: set[tuple[str, str]] = set()  # (conn_id, bus_id) to avoid duplicate shunts
-
-    visited_buses: set[str] = {ground}
-    queue: list[str] = []
-
-    # Sequence=1/2: keep classic "ground-touching connections first".
-    if sequence in (1, 2):
-        root_conns: list[str] = []
-        for conn_id, conn in nw.connections.items():
-            a = bus_id_of(conn.start)
-            b = bus_id_of(conn.end)
-            if a == ground or b == ground:
-                root_conns.append(conn_id)
-
-        # Add all ground-touching connections first
-        for conn_id in root_conns:
-            conn = nw.connections[conn_id]
-            a = bus_id_of(conn.start)
-            b = bus_id_of(conn.end)
-
-            if a == ground and b == ground:
-                added_series_conns.add(conn_id)
-                continue
-
-            non_ground_bus = b if a == ground else a
-
-            Z_pu = z_pu_of_connection(conn, prefer_bus=non_ground_bus)
-            add_branchspec(
-                BranchSpec(
-                    Z_pu=Z_pu,
-                    start=None,
-                    end=non_ground_bus,
-                    has_source=conn_has_source(conn),
-                )
-            )
-            added_series_conns.add(conn_id)
-
-            if non_ground_bus not in visited_buses:
-                visited_buses.add(non_ground_bus)
-                queue.append(non_ground_bus)
-
-    # Sequence=0: first add all grounding shunts (bus->ground) to seed BFS.
-    if sequence == 0:
-        for conn_id, conn in nw.connections.items():
-            u = bus_id_of(conn.start)
-            v = bus_id_of(conn.end)
-
-            for bs in emitter(conn, u, v):
-                bs = canonicalize_branch(bs)
-
-                if is_ground_branch(bs):
-                    # Pre-seed only with ground branches.
-                    if bs.end is None:
-                        continue  # degenerate, should not happen
-
-                    key = (conn_id, bs.end)
-                    if key in added_shunts:
-                        continue
-
-                    add_branchspec(bs)
-                    added_shunts.add(key)
-
-                    if bs.end not in visited_buses:
-                        visited_buses.add(bs.end)
-                        queue.append(bs.end)
-
-            # If this connection emits no series branch (delta-blocked etc.),
-            # we will mark it as "done" later during BFS when encountered from a
-            # visited bus. We do NOT mark it here because the series branch may
-            # still exist.
-
-        # If we could not find any grounding reference, Z0 Zbus is ill-defined
-        # for islands.
-        non_ground_busses = [b for b in nw.busses.keys() if b != ground]
-        if non_ground_busses and not queue:
-            raise ValueError(
-                "Cannot build Z0 network: no grounding paths "
-                "(bus->ground shunts) were found. Provide transformer neutral "
-                "grounding (YN + Zn) or other grounding components."
-            )
-
-    # BFS expansion for all sequences
-    while queue:
-        u = queue.pop(0)
-
-        for conn_id in incidence.get(u, []):
-            if conn_id in added_series_conns:
-                continue
-
-            conn = nw.connections[conn_id]
-            v = other_bus_id(conn, u)
-
-            # Emit branches for this connection (may be empty for Z0).
-            branches = emitter(conn, u, v)
-
-            # First, add any ground branches that target either u or v (avoid
-            # duplicates).
-            for bs in branches:
-                bs = canonicalize_branch(bs)
-
-                if is_ground_branch(bs):
-                    if bs.end is None:
-                        continue
-
-                    key = (conn_id, bs.end)
-                    if key in added_shunts:
-                        continue
-
-                    add_branchspec(bs)
-                    added_shunts.add(key)
-
-                    if bs.end not in visited_buses:
-                        visited_buses.add(bs.end)
-                        queue.append(bs.end)
-
-            # Then, add the first series branch (if any) to expand the graph.
-            series_branches = [
-                canonicalize_branch(bs) for bs in branches
-                if not is_ground_branch(bs)
-            ]
-            if not series_branches:
-                # No series topology contribution (e.g. delta-blocked without
-                # transfer).
-                added_series_conns.add(conn_id)
-                continue
-
-            # For MVP, we expect at most one series branch per connection.
-            if len(series_branches) > 1:
-                raise ValueError(
-                    "Internal error: expected at most one series branch per "
-                    f"connection. Got {len(series_branches)} for connection "
-                    f"{conn_id!r}."
-                )
-
-            bs = series_branches[0]
-            add_branchspec(bs)
-            added_series_conns.add(conn_id)
-
-            # Normal BFS expansion: if v was not visited, mark and enqueue it.
-            # Note: For Z0, it is possible that the series branch does not
-            # exist; then we never reach v via that conn.
-            if v not in visited_buses:
-                visited_buses.add(v)
-                queue.append(v)
-
-    # Ensure all connections were processed (no disconnected islands).
-    missing = set(nw.connections.keys()) - added_series_conns
-    if missing:
-        raise ValueError(
-            "Not all connections could be added to the short-circuit network. "
-            "Likely the network has a disconnected island not connected to the "
-            "reference (GROUND) or no grounding exists for Z0. "
-            f"Missing connections: {sorted(missing)}"
-        )
-
-    # Optional: add induction motor source branches ground->bus (sequence=1 only).
-    if sequence == 1 and cfg.include_induction_motor_sources:
-        for conn in nw.connections.values():
-            a = bus_id_of(conn.start)
-            b = bus_id_of(conn.end)
-            terminal_bus = a if a != ground else (b if b != ground else None)
-            if terminal_bus is None:
-                continue
-
-            for comp in conn.components.values():
-                if comp.__class__.__name__ != "InductionMotor":
-                    continue
-                if not _is_source(comp):
-                    continue
-
-                Z_ohm = _get_Z_ohm(comp)
-                Z_pu = ohm_to_pu(
-                    Z_ohm,
-                    S_base=cfg.S_base,
-                    U_base=U_base[terminal_bus]
-                )
-                add_branchspec(BranchSpec(
-                    Z_pu=Z_pu,
-                    start=None,
-                    end=terminal_bus,
-                    has_source=True)
-                )
-
-    return nw_seq
+    return SequenceNetworkBuilder(
+        nwgraph,
+        sequence=sequence,
+        config=config,
+        get_Z_ohm=get_Z_ohm,
+        is_source_component=is_source_component,
+        bus_u_base=bus_u_base,
+    ).build()
 
 # ------------------------------------------------------------------------------
 # Helper functions

@@ -118,51 +118,81 @@ class RodEarthElectrode(EarthElectrode):
 
 @dataclass
 class PEConductor:
-    STD_SIZES = [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120, 150, 185, 240, 300]  # mm²
-
+    STD_SIZES = [
+        1.5, 2.5, 4, 6, 10,
+        16, 25, 35, 50, 70, 95,
+        120, 150, 185, 240, 300
+    ]  # mm²
     conductor_material: ConductorMaterial
     insulation_material: InsulationMaterial
-    seperated: bool
+    separated: bool
 
     k: float = field(init=False, default=0.0)
     S: Quantity = field(init=False, default=None)
 
     def __post_init__(self):
         if self.insulation_material == InsulationMaterial.PRC:
-            self._insulation_material = InsulationMaterial.EPR
+            self._insul_mat = InsulationMaterial.EPR
         else:
-            self._insulation_material = self.insulation_material
+            self._insul_mat = self.insulation_material
 
-        if self.seperated:
+        if self.separated:
             self.k = tbl_k_factor_1.data_value(
                 self.conductor_material,
-                self._insulation_material
+                self._insul_mat
             )
         else:
             self.k = tbl_k_factor_2.data_value(
                 self.conductor_material,
-                self._insulation_material
+                self._insul_mat
             )
+
+    @classmethod
+    def get_std_csa(cls, S: Quantity) -> Quantity:
+        S_mag = S.to('mm**2').m
+        delta_S = [abs(S_mag - S_std) for S_std in cls.STD_SIZES]
+        delta_S_min = min(delta_S)
+        i_min = delta_S.index(delta_S_min)
+        S_std = cls.STD_SIZES[i_min]
+        if S_std < S_mag:
+            S_std = cls.STD_SIZES[min(i_min + 1, len(cls.STD_SIZES) - 1)]
+        return Q_(S_std, 'mm**2')
 
     def cross_section_area(
         self,
-        I_f: Quantity,
-        t_u: Quantity,
+        If: Quantity,
+        t_interrupt: Quantity,
         mech_protected: bool = True
     ) -> Quantity:
-        I_f = I_f.to('A').m
-        t_u = t_u.to('s').m
-        if t_u > 5.0:
+        """
+        Returns the standardized cross-sectional area for the PE-conductor.
+
+        Parameters
+        ----------
+        If: Quantity
+            Fault current that may flow through the PE-conductor.
+        t_interrupt: Quantity
+            Time before the protective device has completely interrupted the
+            fault current.
+        mech_protected: bool
+            Indicates whether the PE-conductor is mechanically protected, e.g.
+            PE-conductor in a conduit.
+
+        Returns
+        -------
+        Quantity
+        """
+        If = If.to('A').m
+        t_interrupt = t_interrupt.to('s').m
+        if t_interrupt > 5.0:
             raise ValueError("Maximum interruption time is 5 s.")
-        S = I_f * math.sqrt(t_u) / self.k
-        delta_S = [abs(S - S_std) for S_std in self.STD_SIZES]
-        delta_S_min = min(delta_S)
-        i_min = delta_S.index(delta_S_min)
-        S = self.STD_SIZES[i_min]
+
+        S_cal = If * math.sqrt(t_interrupt) / self.k
+        S_std = self.get_std_csa(Q_(S_cal, 'mm**2'))
         if mech_protected:
-            S = max(S, 2.5)
+            S = max(S_std.m, 2.5)
         else:
-            S = max(S, 4.0)
+            S = max(S_std.m, 4.0)
         self.S = Q_(S, 'mm ** 2')
         return self.S
 
@@ -171,11 +201,11 @@ class EarthConductor(PEConductor):
 
     def cross_section_area(
         self,
-        I_f: Quantity,
-        t_u: Quantity,
+        If: Quantity,
+        t_interrupt: Quantity,
         mech_protected: bool = True
     ) -> Quantity:
-        S = super().cross_section_area(I_f, t_u, False)
+        S = super().cross_section_area(If, t_interrupt, False)
         if mech_protected:
             S = max(S.m, 16.0)
         elif self.conductor_material == ConductorMaterial.COPPER:

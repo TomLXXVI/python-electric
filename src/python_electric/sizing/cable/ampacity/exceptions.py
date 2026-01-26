@@ -1,0 +1,4 @@
+
+
+class CurrentExceedanceError(Exception):
+    pass

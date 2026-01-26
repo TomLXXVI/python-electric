@@ -6,7 +6,7 @@ from python_electric import Quantity, Q_, VoltReference
 from python_electric import sizing
 from python_electric.calc import voltage_drop
 
-from python_electric.network.network import Component
+from python_electric.network.graph import Component
 
 __all__ = ["Transformer"]
 
@@ -148,7 +148,7 @@ class Transformer(Component):
             Power factor.
         volt_ref: VoltReference, {VoltRef.PH3_LINE_TO_LINE, VoltRef.PH3_GROUND_TO_LINE (default)}
             Reference of the voltage measurement: either between two lines
-            (line-to-line), or between ground/neutral and a line
+            (line-to-line), or between ground (neutral) and a line
             (ground-to-line).
 
         Returns
@@ -174,15 +174,12 @@ class Transformer(Component):
     def get_impedance(self, volt_factor: float = 1.1) -> dict[int, Quantity]:
         """
         Returns the positive, negative, and zero-sequence impedance of the
-        transformer.
+        transformer referred to the secondary side of the transformer.
 
         Parameters
         ----------
         volt_factor: float, default 1.1
             Voltage factor used to calculate the impedance of the transformer.
-        z0_factor: float, default 1.0
-            Scaling factor that determines the zero-sequence impedance as a
-            fraction of the positive-sequence impedance.
 
         Returns
         -------

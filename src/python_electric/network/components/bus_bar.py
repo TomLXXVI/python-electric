@@ -6,7 +6,7 @@ from ...materials import ConductorMaterial
 from ...protection import CircuitBreaker
 from ...calc import voltage_drop
 
-from python_electric.network.network import Component
+from python_electric.network.graph import Component
 
 __all__ = ["BusBar"]
 
@@ -121,6 +121,30 @@ class BusBar(Component):
         self.I_sc_max = I_sc_max
         self.I_sc_min = I_sc_min
         return None
+
+    @property
+    def I_b_tot(self) -> Quantity:
+        return self.I_b
+
+    @I_b_tot.setter
+    def I_b_tot(self, v: Quantity) -> None:
+        self.I_b = v
+
+    @property
+    def I_n_tot(self) -> Quantity:
+        return self.I_n
+
+    @I_n_tot.setter
+    def I_n_tot(self, v: Quantity) -> None:
+        self.I_n = v
+
+    @property
+    def I_z_tot(self) -> Quantity:
+        return self.I_z
+
+    @I_z_tot.setter
+    def I_z_tot(self, v: Quantity) -> None:
+        self.I_z = v
 
 
 def _get_nominal_current(I_z: Quantity) -> Quantity:

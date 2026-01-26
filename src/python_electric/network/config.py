@@ -7,7 +7,7 @@ from ..materials import ConductorMaterial, InsulationMaterial
 __all__ = ["SCCalcConfig", "PEConductorConfig"]
 
 
-@dataclass(frozen=True)
+@dataclass
 class SCCalcConfig:
     """
     Configuration for building sequence short-circuit networks.
@@ -40,7 +40,7 @@ class SCCalcConfig:
     induction_motor_min_Pn: Quantity = Q_(0.0, "kW")
 
 
-@dataclass(frozen=True)
+@dataclass
 class PEConductorConfig:
     """
     Configuration settings for sizing PE-conductors.

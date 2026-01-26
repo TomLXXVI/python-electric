@@ -165,7 +165,7 @@ class CircuitBreakerAdvisor:
             )
 
         # Ensure sizing/current data exists (these should normally exist in Cable)
-        for attr in ("I_b", "I_n", "I_z"):
+        for attr in ("I_b_tot", "I_n_tot", "I_z_tot"):
             if getattr(self.cable, attr, None) is None:
                 raise ValueError(
                     f"Cable attribute '{attr}' is required but not set."
@@ -173,7 +173,7 @@ class CircuitBreakerAdvisor:
 
         # I2t may be None for some cases; we allow it because CircuitBreaker
         # accepts I2t=None. But the check might be less strict in that case.
-        _ = getattr(self.cable, "I2t", None)
+        _ = getattr(self.cable, "I2t_tot", None)
 
         # Ensure series not empty
         if not self.icu_series:
@@ -238,7 +238,7 @@ class CircuitBreakerAdvisor:
                 # Limit k_m grid using the fundamental feasibility constraint:
                 # For industrial adjustable, CircuitBreaker uses I_r = I_b and
                 # I_m_min = 0.8 * k_m * I_r; we need I_sc_min >= I_m_min.
-                I_b = self.cable.I_b.to("A")
+                I_b = self.cable.I_b_tot.to("A")
                 km_max_allowed = (I_sc_min.m / (0.8 * I_b.m)) if I_b.m > 0 else 0.0
 
                 for km in self.km_grid:
@@ -321,10 +321,10 @@ class CircuitBreakerAdvisor:
             cb = CircuitBreaker(
                 standard=self.standard,
                 category=category,
-                I_b=self.cable.I_b,
-                I_n=self.cable.I_n,
-                I_z=self.cable.I_z,
-                I2t=getattr(self.cable, "I2t", None),
+                I_b=self.cable.I_b_tot,
+                I_n=self.cable.I_n_tot,
+                I_z=self.cable.I_z_tot,
+                I2t=getattr(self.cable, "I2t_tot", None),
                 I_cu=I_cu,
                 E_t=None,
                 k_m=k_m,

@@ -22,6 +22,7 @@ from ...materials import (
 )
 from .ampacity import unburied
 from .ampacity import buried
+from .ampacity.exceptions import CurrentExceedanceError
 
 __all__ = [
     "Ambient",
@@ -33,6 +34,7 @@ __all__ = [
     "get_size",
     "set_size",
     "get_nominal_current",
+    "CurrentExceedanceError"
 ]
 
 
@@ -77,21 +79,21 @@ tbl_unburied_group_correction = _create_unburied_group_correction_table()
 class CableArrangement(StrEnum):
     BUS_BAR = "bus_bar"
     MULTICORE = "multicore"
-    SINGLE_SPACED = "single_spaced"
-    SINGLE_SPACED_2R = "single_spaced_2r"
-    SINGLE_SPACED_4R = "single_spaced_4r"
-    SINGLE_TREFOIL = "single_trefoil"
-    SINGLE_FLAT = "single_flat"
+    SINGLE_CORE_SPACED = "single_core_spaced"
+    SINGLE_CORE_SPACED_2R = "single_core_spaced_2r"
+    SINGLE_CORE_SPACED_4R = "single_core_spaced_4r"
+    SINGLE_CORE_TREFOIL = "single_core_trefoil"
+    SINGLE_CORE_TOUCHING = "single_core_touching"
 
 
 CABLE_UNIT_REACTANCES: dict[str, float] = {  # ohm / m
     'bus_bar': 0.15e-3,
     'multicore': 0.08e-3,
-    'single_spaced': 0.15e-3,
-    'single_spaced_2r': 0.145e-3,
-    'single_spaced_4r': 0.19e-3,
-    'single_trefoil': 0.085e-3,
-    'single_flat': 0.095e-3
+    'single_core_spaced': 0.15e-3,
+    'single_core_spaced_2r': 0.145e-3,
+    'single_core_spaced_4r': 0.19e-3,
+    'single_core_trefoil': 0.085e-3,
+    'single_core_touching': 0.095e-3
 }
 
 
@@ -122,11 +124,12 @@ class Ambient(StrEnum):
 
 
 class CableMounting(IntEnum):
-    BUNCHED = 1  # Bunched in air, on a surface, embedded or enclosed
+    BUNCHED_SIMILAR = 1  # Bunched in air, on a surface, embedded or enclosed; cables have similar sections/loads
     UNPERFORATED_TRAY = 2  # Single layer on wall, floor, or unperforated tray
     CEILING = 3  # Single layer fixed directly under a wooden ceiling
     PERFORATED_TRAY = 4  # Single layer on a perforated horizontal or vertical tray
     LADDER = 5  # Single layer on ladder support or cleats, etc.
+    BUNCHED_DISSIMILAR = 6  # Bunched in air, on a surface, embedded or enclosed; cables have dissimilar sections/loads
 
 
 def get_nominal_current(I_load: float) -> float:
@@ -303,8 +306,6 @@ class CableData:
         Conductor material. See enum ConductorMaterial.
     insulation_type: InsulationMaterial
         Insulation material. See enum InsulationMaterial.
-    ambient: Ambient
-        The ambient where the cable is installed. See enum Ambient.
     T_amb: float.
         Steady-state operating temperature of the cable in degrees Celsius.
     install_method: InstallMethod
@@ -344,12 +345,15 @@ class CableData:
         the cable at standard installation conditions.
     I2t: float, default 0.0
         Joule integral of the cable in A².s.
+    ambient: Ambient
+        The ambient where the cable is installed. See enum Ambient. If the
+        cable is unburied, ambient is set to Ambient.AIR. If the cable is
+        buried (installation method D), ambient is set to Ambient.GROUND.
     """
     I_b: float # A
     L: float  # m
     conductor_type: ConductorMaterial
     insulation_type: InsulationMaterial
-    ambient: Ambient
     T_amb: float  # degC
     install_method: InstallMethod
     cable_mounting: CableMounting
@@ -357,6 +361,8 @@ class CableData:
     num_circuits: int = 1
     num_loaded_conductors: int = 3
     h3_content: float = 0.0  # fraction 0..1
+
+    ambient: Ambient = field(init=False, default=None)
 
     S: float = field(init=False, default=0.0)  # mm²
     I_z: float = field(init=False, default=0.0)  # A
@@ -366,9 +372,14 @@ class CableData:
     I2t: float = field(init=False, default=0.0)  # A².s
 
     def __post_init__(self):
-        self.cond_props = CONDUCTOR_PROPS[self.conductor_type]
-        self.insul_props = INSULATION_PROPS[self.insulation_type]
-    
+        self.con_props = CONDUCTOR_PROPS[self.conductor_type]
+        self.ins_props = INSULATION_PROPS[self.insulation_type]
+
+        if self.install_method.unburied:
+            self.ambient = Ambient.AIR
+        else:
+            self.ambient = Ambient.GROUND
+
     def update(self, k, I_z0, S, I_n) -> None:
         I_z = k * I_z0  # current-carrying capacity at actual conditions
         self.k_z = k
@@ -376,7 +387,7 @@ class CableData:
         self.I_z = I_z
         self.I_z0 = I_z0
         self.I_n = I_n
-        self.I2t = _joule_integral(self.cond_props.type, self.insul_props.type, S)
+        self.I2t = _joule_integral(self.con_props.type, self.ins_props.type, S)
 
 
 def get_size(
@@ -384,63 +395,98 @@ def get_size(
     based_on_I_nom: bool = True
 ) -> CableData:
     """
-    Determines the required minimal cross-sectional area S of the cable
-    conductors in square millimeters (mm²).
+    Determines the required minimal cross-sectional area S and ampacity Iz0 of
+    the cable conductors.
 
     Parameters
     ----------
     cable_data:
-        Instance of `CableSizingData` holding data about the cable needed to
-        determine the required minimal cross-sectional area of the cable
+        Instance of `CableData` holding all the user input data needed to
+        determine the minimal required cross-sectional area of the cable
         conductors.
     based_on_I_nom: bool, default True
         Indicates that the cross-sectional area of the cable conductors needs to
         be determined based on the next standardized nominal current which is
         just greater than the rated load current. If False, conductors are sized
         based on the rated load current of the cable.
+
+    Returns
+    -------
+    CableData
+        Returns the original `CableData` object supplemented with the attributes
+        that were calculated: the correction factor k, the current-carrying
+        capacity Iz0 under standard conditions, the conductor cross-sectional
+        area S, the nominal current I_n belonging to the cable.
     """
+    # --------------------------------------------------------------------------
+    # Correction factors
+    # --------------------------------------------------------------------------
+    # -> ambient temperature
     k_T = _temperature_correction(
-        cable_data.insul_props.type,
+        cable_data.ins_props.type,
         cable_data.ambient,
         cable_data.T_amb
     )
-    k_G = tbl_unburied_group_correction.data_value(cable_data.cable_mounting, cable_data.num_circuits)
+    # -> proximity of other cables/circuits
+    if cable_data.cable_mounting == CableMounting.BUNCHED_DISSIMILAR:
+        k_G = 1 / math.sqrt(cable_data.num_circuits)
+    else:
+        k_G = tbl_unburied_group_correction.data_value(
+            cable_data.cable_mounting,
+            cable_data.num_circuits
+        )
+
+    # -> presence of 3rd-order harmonics
     k_H = _harmonics_correction(cable_data.h3_content)
+
     k = k_T * k_G * k_H
+
+    # --------------------------------------------------------------------------
+    # Load current + nominal current
+    # --------------------------------------------------------------------------
     I_b = cable_data.I_b
-    I_b_corr = I_b / k
+    I_b_corr = I_b / k  # refer I_b to standard conditions
+
     I_n = get_nominal_current(I_b)
     I_n_corr = I_n / k  # refer I_n to standard conditions
+
+    # --------------------------------------------------------------------------
+    # Cross-sectional area + ampacity at standard conditions
+    # --------------------------------------------------------------------------
+    # -> Unburied cable
     if cable_data.install_method.unburied:
         S = unburied.get_cross_sectional_area(
-            conductor_props=cable_data.cond_props,
-            insulation_props=cable_data.insul_props,
+            conductor_props=cable_data.con_props,
+            insulation_props=cable_data.ins_props,
             num_loaded_conductors=cable_data.num_loaded_conductors,
             ref_method=cable_data.install_method,
             current=I_n_corr if based_on_I_nom else I_b_corr
         )
         I_z0 = unburied.get_ampacity(
-            conductor_props=cable_data.cond_props,
-            insulation_props=cable_data.insul_props,
+            conductor_props=cable_data.con_props,
+            insulation_props=cable_data.ins_props,
             num_loaded_conductors=cable_data.num_loaded_conductors,
             ref_method=cable_data.install_method,
             cross_sectional_area=S
         )
+    # -> Buried cable
     elif cable_data.install_method.buried:
         S = buried.get_cross_sectional_area(
-            conductor_props=cable_data.cond_props,
-            insulation_props=cable_data.insul_props,
+            conductor_props=cable_data.con_props,
+            insulation_props=cable_data.ins_props,
             num_loaded_conductors=cable_data.num_loaded_conductors,
             current=I_n_corr if based_on_I_nom else I_b_corr
         )
         I_z0 = buried.get_ampacity(
-            conductor_props=cable_data.cond_props,
-            insulation_props=cable_data.insul_props,
+            conductor_props=cable_data.con_props,
+            insulation_props=cable_data.ins_props,
             num_loaded_conductors=cable_data.num_loaded_conductors,
             cross_sectional_area=S
         )
     else:
         raise ValueError(f"Unknown installation method.")
+
+    # Update cable_data with the results.
     cable_data.update(k, I_z0, S, I_n)
     return cable_data
 
@@ -453,7 +499,7 @@ def set_size(cable_data: CableData, S: float) -> CableData:
     Parameters
     ----------
     cable_data:
-        Instance of `CableSizingData` holding the data about the conductor
+        Instance of `CableData` holding the user input data about the conductor
         material, insulation material, and the installation method of the cable.
     S:
         Cross-sectional area of the cable conductors in square millimeters.
@@ -462,32 +508,57 @@ def set_size(cable_data: CableData, S: float) -> CableData:
     -------
     CableData
     """
+    # --------------------------------------------------------------------------
+    # Correction factors
+    # --------------------------------------------------------------------------
+    # -> Ambient temperature
     k_T = _temperature_correction(
-        cable_data.insul_props.type,
+        cable_data.ins_props.type,
         cable_data.ambient,
         cable_data.T_amb
     )
-    k_G = tbl_unburied_group_correction.data_value(cable_data.cable_mounting, cable_data.num_circuits)
+
+    # -> Proximity of other cables/circuits
+    if cable_data.cable_mounting == CableMounting.BUNCHED_DISSIMILAR:
+        k_G = 1 / math.sqrt(cable_data.num_circuits)
+    else:
+        k_G = tbl_unburied_group_correction.data_value(
+            cable_data.cable_mounting,
+            cable_data.num_circuits
+        )
+
+    # -> Presence of 3rd-order harmonics
     k_H = _harmonics_correction(cable_data.h3_content)
+
     k = k_T * k_G * k_H
+
+    # --------------------------------------------------------------------------
+    # Load current + nominal current
+    # --------------------------------------------------------------------------
     I_b = cable_data.I_b
     I_n = get_nominal_current(I_b)
+
+    # --------------------------------------------------------------------------
+    # Ampacity at standard conditions
+    # --------------------------------------------------------------------------
     if cable_data.install_method.unburied:
         I_z0 = unburied.get_ampacity(
-            conductor_props=cable_data.cond_props,
-            insulation_props=cable_data.insul_props,
+            conductor_props=cable_data.con_props,
+            insulation_props=cable_data.ins_props,
             num_loaded_conductors=cable_data.num_loaded_conductors,
             ref_method=cable_data.install_method,
             cross_sectional_area=S
         )
     elif cable_data.install_method.buried:
         I_z0 = buried.get_ampacity(
-            conductor_props=cable_data.cond_props,
-            insulation_props=cable_data.insul_props,
+            conductor_props=cable_data.con_props,
+            insulation_props=cable_data.ins_props,
             num_loaded_conductors=cable_data.num_loaded_conductors,
             cross_sectional_area=S
         )
     else:
         raise ValueError(f"Unknown installation method.")
+
+    # Update cable_data with the results.
     cable_data.update(k, I_z0, S, I_n)
     return cable_data

@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 
 from python_electric import Quantity
-from python_electric.network.network import Component
+from python_electric.network.graph import Component
 
 __all__ = ["Grid"]
 

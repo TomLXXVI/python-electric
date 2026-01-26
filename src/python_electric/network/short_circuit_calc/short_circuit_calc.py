@@ -1,12 +1,10 @@
-import dataclasses
-
 from ... import Quantity
 from ...short_circuit.network import Network as SCNetwork
 from ...short_circuit.network import PerUnitSystem
-from ...short_circuit.faults import ThreePhaseFault, LineToGroundFault
-from ..network import Network
+from ...short_circuit.faults import ThreePhaseFault, LineToGroundFault, LineToLineFault
 from ..config import SCCalcConfig
-from .sequence_network_builder import build_sequence_network
+from ..topology import NetworkTopology
+from .sequence_network_builder import build_sequence_network, MissingConnectionError
 
 
 __all__ = ["ShortCircuitCalc"]
@@ -16,10 +14,10 @@ class ShortCircuitCalc:
 
     class Max:
 
-        def __init__(self, network: Network, cfg: SCCalcConfig | None) -> None:
+        def __init__(self, network: NetworkTopology, cfg: SCCalcConfig | None) -> None:
             self.nw = network
             if isinstance(cfg, SCCalcConfig):
-                self.config = dataclasses.replace(cfg, sc_case="MAX")
+                self.config.sc_case = "MAX"
             else:
                 self.config = SCCalcConfig("MAX")
             self.nw1: SCNetwork | None = None
@@ -31,7 +29,7 @@ class ShortCircuitCalc:
 
         def _create_sequence_network(self) -> None:
             self.nw1 = build_sequence_network(
-                self.nw,
+                self.nw.graph,
                 sequence=1,
                 config=self.config
             )
@@ -45,7 +43,7 @@ class ShortCircuitCalc:
         def __call__(self, bus_id: str) -> Quantity:
             self._fault.set_faulted_node(bus_id)
             If_pu = self._fault.get_fault_current()
-            bus = self.nw.busses[bus_id]
+            bus = self.nw.graph.busses[bus_id]
             pu_sys = PerUnitSystem(self.config.S_base, bus.U_base)
             If = pu_sys.get_actual_current(If_pu)
             return abs(If)
@@ -60,16 +58,18 @@ class ShortCircuitCalc:
 
     class Min:
 
-        def __init__(self, network: Network, cfg: SCCalcConfig | None) -> None:
+        def __init__(self, network: NetworkTopology, cfg: SCCalcConfig | None) -> None:
             self.nw = network
             if isinstance(cfg, SCCalcConfig):
-                self.config = dataclasses.replace(cfg, sc_case="MIN")
+                self.config.sc_case = "MIN"
             else:
                 self.config = SCCalcConfig("MIN")
+
             self.nw1: SCNetwork | None = None
             self.nw2: SCNetwork | None = None
             self.nw0: SCNetwork | None = None
-            self._fault_type = LineToGroundFault
+
+            self._fault_type = LineToLineFault if self.nw.earthing_system.is_IT() else LineToGroundFault
             self._fault = None
 
             self._create_sequence_networks()
@@ -77,20 +77,23 @@ class ShortCircuitCalc:
 
         def _create_sequence_networks(self) -> None:
             self.nw1 = build_sequence_network(
-                self.nw,
+                self.nw.graph,
                 sequence=1,
                 config=self.config
             )
             self.nw2 = build_sequence_network(
-                self.nw,
+                self.nw.graph,
                 sequence=2,
                 config=self.config
             )
-            self.nw0 = build_sequence_network(
-                self.nw,
-                sequence=0,
-                config=self.config
-            )
+            try:
+                self.nw0 = build_sequence_network(
+                    self.nw.graph,
+                    sequence=0,
+                    config=self.config
+                )
+            except MissingConnectionError:
+                self.nw0 = None
 
         def _create_fault(self) -> None:
             self._fault = self._fault_type(
@@ -101,9 +104,12 @@ class ShortCircuitCalc:
         def __call__(self, bus_id: str) -> Quantity:
             self._fault.set_faulted_node(bus_id)
             If_pu = self._fault.get_fault_current_abc()
-            bus = self.nw.busses[bus_id]
+            bus = self.nw.graph.busses[bus_id]
             pu_sys = PerUnitSystem(self.config.S_base, bus.U_base)
-            If = pu_sys.get_actual_current(If_pu.flatten()[0])
+            if issubclass(self._fault_type, LineToGroundFault):
+                If = pu_sys.get_actual_current(If_pu.flatten()[0])
+            else:
+                If = pu_sys.get_actual_current(If_pu.flatten()[1])
             return abs(If)
 
         def print_seq_network(self, seq: int) -> None:
@@ -134,7 +140,7 @@ class ShortCircuitCalc:
 
     def __init__(
         self,
-        network: Network,
+        network: NetworkTopology,
         cfg: SCCalcConfig | None = None
     ) -> None:
         self.max = ShortCircuitCalc.Max(network, cfg)

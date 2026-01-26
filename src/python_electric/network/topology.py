@@ -14,8 +14,7 @@ from ..protection import (
 )
 from ..protection.earthing_system import IndirectContactProtResult
 from .config import SCCalcConfig, PEConductorConfig
-from .network import Network, Connection, Component, TComponent
-from .short_circuit_calc import ShortCircuitCalc
+from .graph import NetworkGraph, Connection, Component, TComponent
 from .components import (
     Load,
     BusBar,
@@ -27,7 +26,6 @@ from .components import (
 from .components.cable import (
     ConductorMaterial,
     InsulationMaterial,
-    Ambient,
     InstallMethod,
     CableMounting,
     CableArrangement,
@@ -37,7 +35,6 @@ from .components.cable import (
     check_selectivity,
     SelectivityResult
 )
-
 
 __all__ = [
     "NetworkTopology",
@@ -106,18 +103,18 @@ class CableInput(ComponentInput):
     k_ext: float = 1.0
     conductor_material: ConductorMaterial = ConductorMaterial.COPPER
     insulation_material: InsulationMaterial = InsulationMaterial.XLPE
-    ambient: Ambient = Ambient.AIR
     T_amb: Quantity = Q_(30, 'degC')
     install_method: InstallMethod = InstallMethod.E
     cable_mounting: CableMounting = CableMounting.PERFORATED_TRAY
     cable_arrangement: CableArrangement = CableArrangement.MULTICORE
-    num_circuits: int = 1
+    num_other_circuits: int = 0
     h3_fraction: float = 0.0
     sizing_based_on_I_nom: bool = False
     earthing_system: EarthingSystem | None = None
     phase_system: PhaseSystem = PhaseSystem.PH3
     z0_r_factor: float = 3.0
     z0_x_factor: float = 3.0
+    n_phase: int = 1
 
     load: Load = field(init=False, default=None)
 
@@ -128,7 +125,7 @@ class CableInput(ComponentInput):
         self.load = load
         cable = Cable(
             name=self.name,
-            I_b=self.load.I_b,
+            I_b_tot=self.load.I_b,
             U_l=self.load.U_l,
             cos_phi=self.load.cos_phi,
             L=self.L,
@@ -136,18 +133,18 @@ class CableInput(ComponentInput):
             k_ext=self.k_ext,
             conductor_material=self.conductor_material,
             insulation_material=self.insulation_material,
-            ambient=self.ambient,
             T_amb=self.T_amb,
             install_method=self.install_method,
             cable_mounting=self.cable_mounting,
             cable_arrangement=self.cable_arrangement,
-            num_circuits=self.num_circuits,
+            num_other_circuits=self.num_other_circuits,
             h3_fraction=self.h3_fraction,
             sizing_based_on_I_nom=self.sizing_based_on_I_nom,
             earthing_system=self.earthing_system,
             phase_system=self.phase_system,
             z0_r_factor=self.z0_r_factor,
-            z0_x_factor=self.z0_x_factor
+            z0_x_factor=self.z0_x_factor,
+            n_phase=self.n_phase
         )
         return cable
 
@@ -268,7 +265,7 @@ class NetworkTopology:
     """
     Central class for designing a low-voltage network.
     """
-    GROUND_ID = Network.GROUND_ID
+    GROUND_ID = NetworkGraph.GROUND_ID
 
     class ShortCircuitCase(StrEnum):
         MAX = "MAX"
@@ -289,7 +286,7 @@ class NetworkTopology:
         cb_standard: CircuitBreaker.Standard = CircuitBreaker.Standard.INDUSTRIAL,
         skin_condition: str = "BB2",
         neutral_distributed: bool = True,
-        R_e_consumer: Quantity | None = None
+        R_e: Quantity | None = None
     ) -> None:
         """
         Initializes a `NetworkTopology` object.
@@ -315,8 +312,8 @@ class NetworkTopology:
         neutral_distributed: bool, default True
             Indicates whether the neutral conductor is also distributed in the
             network or not. Only used in an IT-earthing system.
-        R_e_consumer: Quantity, optional
-            Spreading resistance of the consumer earthing installation. Only
+        R_e: Quantity, optional
+            Earth-spreading resistance of the consumer installation. Only
             used in an IT-earthing system.
         """
         self.name = name
@@ -325,25 +322,53 @@ class NetworkTopology:
         self.cb_standard = cb_standard
         self.skin_condition = skin_condition
         self.neutral_distributed = neutral_distributed
-        self.R_e_consumer = R_e_consumer
-
-        self._network = Network(name)
-
-        # Register with all the component names in the network
-        self._comp_register: dict[str, str] = {}  # component.name -> conn_id
+        self.R_e = R_e
 
         # Configuration settings for the min/max short-circuit calculation
-        self._sc_glob_config = sc_config
+        self._glob_sc_config = sc_config
+        self._sccalc = None
+        self._sc_dict: dict[str, NetworkTopology.ShortCircuitResult] = {}  # bus_id -> min/max short-circuit current
 
         # Global configuration settings applied to all PE-conductors
         if pe_config is None:
-            self._pe_conductor_glob_cfg = PEConductorConfig()
+            self._glob_pe_cfg = PEConductorConfig()
         else:
-            self._pe_conductor_glob_cfg = pe_config
+            self._glob_pe_cfg = pe_config
 
-        self._loads: dict[str, LoadInput | None] = {}  # loads are associated with connections -> see add_connection()
-        self._sc_calc: ShortCircuitCalc | None = None
-        self._sc_dict: dict[str, NetworkTopology.ShortCircuitResult] = {}  # bus_id -> min/max short-circuit current
+        # Register of all the components in the network
+        # component.name -> conn_id
+        self._comp_register: dict[str, str] = {}
+
+        # Loads are associated with connections -> see add_connection()
+        self._loads: dict[str, LoadInput | None] = {}
+
+        # Core network graph object.
+        self._nw_graph = NetworkGraph(name)
+
+    @property
+    def graph(self) -> NetworkGraph:
+        return self._nw_graph
+
+    def add_source_grid_connection(
+        self,
+        conn_id: str,
+        end_id: str,
+        U_l: Quantity,
+        S_sc: Quantity,
+        R_to_X: float = 0.1,
+        z0_r_factor: float = 0.0,
+        z0_x_factor: float = 0.0
+    ) -> None:
+        grid = GridInput(
+            name="grid",
+            U_l=U_l,
+            S_sc=S_sc,
+            R_to_X=R_to_X,
+            z0_r_factor=z0_r_factor,
+            z0_x_factor=z0_x_factor
+        )
+        self.add_connection(conn_id, self.GROUND_ID, end_id)
+        self.add_component(conn_id, grid)
 
     def add_connection(
         self,
@@ -373,7 +398,7 @@ class NetworkTopology:
         """
         if start_id == end_id:
             raise ValueError("A connection cannot have equal start_id and end_id.")
-        self._network.add_connection(conn_id, start_id, end_id)
+        self._nw_graph.add_connection(conn_id, start_id, end_id)
         if load_data is not None:
             load_data.U_l = load_data.U_l if load_data.U_l is not None else self.U_lv
         self._loads[conn_id] = load_data
@@ -403,15 +428,19 @@ class NetworkTopology:
             raise KeyError(f"Connection '{conn_id}' not found.")
 
         comp = None
+
         if isinstance(comp_data, (BusBarInput, CableInput)):
             if isinstance(comp_data, CableInput):
                 if comp_data.earthing_system is None:
                     comp_data.earthing_system = self.earthing_system
             comp = comp_data.create_component(Load(**load_data.to_dict()))
+
         if isinstance(comp_data, GridInput):
             comp = comp_data.create_component()
+
         if isinstance(comp_data, InductionMotorInput):
             comp = comp_data.create_component()
+
         if isinstance(comp_data, TransformerInput):
             comp = comp_data.create_component(Load(**load_data.to_dict()))
 
@@ -426,7 +455,7 @@ class NetworkTopology:
                 f"A component with ID '{comp.name}' has already been "
                 f"added to the network."
             )
-        self._network.add_component(conn_id, comp)
+        self._nw_graph.add_component(conn_id, comp)
 
     def get_component(self, comp_id: str) -> TComponent:
         """
@@ -437,7 +466,7 @@ class NetworkTopology:
         except KeyError:
             raise KeyError(f"Component '{comp_id}' not found.")
 
-        return self._network.get_component(conn_id, comp_id)
+        return self._nw_graph.get_component(conn_id, comp_id)
 
     def get_cable(self, cable_id: str) -> tuple[Cable, Connection]:
         """
@@ -449,27 +478,32 @@ class NetworkTopology:
         except KeyError:
             raise KeyError(f"Cable '{cable_id}' not found.")
 
-        cable = self._network.get_component(conn_id, cable_id)
+        cable = self._nw_graph.get_component(conn_id, cable_id)
 
         if not isinstance(cable, (Cable, BusBar)):
             cls = cable.__class__.__name__
             raise ValueError(f"Component '{cable_id}' is not of type Cable or BusBar, but {cls}.")
 
-        conn = self._network.get_connection(conn_id)
+        conn = self._nw_graph.get_connection(conn_id)
         return cable, conn
 
     def iter_all_cables(self) -> Iterator[Cable]:
         """
         Returns an iterator over the cables in the network.
         """
-        cables = self._network.find_components(Cable)
+        cables = self._nw_graph.find_components(Cable)
         for cable, *_ in cables:
             yield cable
 
     @property
-    def global_config_pe_conductors(self) -> PEConductorConfig:
+    def glob_pe_config(self) -> PEConductorConfig:
         """Returns the global settings for sizing PE-conductors."""
-        return self._pe_conductor_glob_cfg
+        return self._glob_pe_cfg
+
+    @glob_pe_config.setter
+    def glob_pe_config(self, v: PEConductorConfig) -> None:
+        """Sets the global settings for sizing PE-conductors."""
+        self._glob_pe_cfg = v
 
     def get_load(self, conn_id: str) -> Load:
         """Returns the Load object associated with the specified connection."""
@@ -481,7 +515,7 @@ class NetworkTopology:
         load = Load(**load_data.to_dict())
         return load
 
-    def get_short_circuit_current(
+    def get_shortcircuit_current(
         self,
         bus_id: str,
         sc_case: ShortCircuitCase,
@@ -506,25 +540,27 @@ class NetworkTopology:
         Quantity
             The maximum/minimum short-circuit current.
         """
-        if len(self._network.connections) < 1:
+        from python_electric.network.short_circuit_calc import ShortCircuitCalc
+
+        if len(self._nw_graph.connections) < 1:
             raise ValueError("The network has no connections yet.")
 
         if isinstance(sc_config, SCCalcConfig):
-            self._sc_glob_config = sc_config
+            self._glob_sc_config = sc_config
 
-        if self._sc_calc is None or sc_config is not None:
-            self._sc_calc = ShortCircuitCalc(self._network, self._sc_glob_config)
+        if self._sccalc is None or sc_config is not None:
+            self._sccalc = ShortCircuitCalc(self, self._glob_sc_config)
 
         if sc_case == self.ShortCircuitCase.MAX:
             try:
-                return self._sc_calc.max(bus_id)
+                return self._sccalc.max(bus_id)
             except:
                 raise ValueError(
                     f"Short-circuit calculation failed on bus '{bus_id}'."
                 )
         elif sc_case == self.ShortCircuitCase.MIN:
             try:
-                return self._sc_calc.min(bus_id)
+                return self._sccalc.min(bus_id)
             except:
                 raise ValueError(
                     f"Short-circuit calculation failed on bus '{bus_id}'."
@@ -532,7 +568,7 @@ class NetworkTopology:
         else:
             raise ValueError(f"Unknown short-circuit case: '{sc_case}'.")
 
-    def run_short_circuit_calculation(
+    def run_shortcircuit_calc(
         self,
         sc_config: SCCalcConfig | None = None
     ) -> dict[str, ShortCircuitResult]:
@@ -554,27 +590,27 @@ class NetworkTopology:
         """
         # If a short-circuit config is passed, replace the previous one.
         if isinstance(sc_config, SCCalcConfig):
-            self._sc_glob_config = sc_config
+            self._glob_sc_config = sc_config
 
         # Empty the short-circuit dict each time run_short_circuit_calculation()
         # is called.
         self._sc_dict = {}
 
         # Calculate maximum/minimum short-circuit currents at the busses.
-        for bus_id in self._network.busses:
-            if bus_id != Network.GROUND_ID:
-                I_sc_max = self.get_short_circuit_current(bus_id, self.ShortCircuitCase.MAX)
-                I_sc_min = self.get_short_circuit_current(bus_id, self.ShortCircuitCase.MIN)
+        for bus_id in self._nw_graph.busses:
+            if bus_id != NetworkGraph.GROUND_ID:
+                I_sc_max = self.get_shortcircuit_current(bus_id, self.ShortCircuitCase.MAX)
+                I_sc_min = self.get_shortcircuit_current(bus_id, self.ShortCircuitCase.MIN)
                 self._sc_dict[bus_id] = self.ShortCircuitResult(I_sc_max, I_sc_min)
 
         # Assign the maximum/minimum short-circuit currents to cables/busbars.
         if self._sc_dict:
-            cables = self._network.find_components(Cable)
+            cables = self._nw_graph.find_components(Cable)
             for cable, _, start_id, end_id in cables:
                 cable.I_sc_max = self._sc_dict[start_id].max
                 cable.I_sc_min = self._sc_dict[end_id].min
 
-            busbars = self._network.find_components(BusBar)
+            busbars = self._nw_graph.find_components(BusBar)
             for busbar, _, start_id, end_id in busbars:
                 busbar.I_sc_max = self._sc_dict[start_id].max
                 busbar.I_sc_min = self._sc_dict[end_id].min
@@ -656,13 +692,13 @@ class NetworkTopology:
         CircuitBreaker
         """
         if not self._sc_dict:
-            if self._sc_glob_config is None:
+            if self._glob_sc_config is None:
                 warnings.warn(
                     "Short-circuit currents have not been calculated yet. "
                     "These are calculated now with a default short-circuit "
                     "configuration.", category=UserWarning
                 )
-            self.run_short_circuit_calculation()
+            self.run_shortcircuit_calc()
 
         cable, _ = self.get_cable(cable_id)
 
@@ -715,23 +751,23 @@ class NetworkTopology:
         (TN-C), it may be that the calculated cross-sectional is overwritten due
         to other requirements that apply to PEN-conductors.
         """
-        pe_conductor_cfg = self._pe_conductor_glob_cfg if pe_conductor_cfg is None else pe_conductor_cfg
+        pe_conductor_cfg = self._glob_pe_cfg if pe_conductor_cfg is None else pe_conductor_cfg
 
         # Get minimum short-circuit current
         cable, conn = self.get_cable(cable_id)
-        I_sc_min = self.get_short_circuit_current(conn.end.name, self.ShortCircuitCase.MIN)
+        I_sc_min = self.get_shortcircuit_current(conn.end.name, self.ShortCircuitCase.MIN)
 
         pe_conductor = PEConductor(
             conductor_material=pe_conductor_cfg.cond_mat,
             insulation_material=pe_conductor_cfg.insul_mat,
-            seperated=pe_conductor_cfg.separated
+            separated=pe_conductor_cfg.separated
         )
         S_pe = pe_conductor.cross_section_area(
-            I_f=I_sc_min,
-            t_u=pe_conductor_cfg.t_interrupt,
+            If=I_sc_min,
+            t_interrupt=pe_conductor_cfg.t_interrupt,
             mech_protected=pe_conductor_cfg.mech_protected
         )
-        if not pe_conductor.seperated and S_pe < cable.S:
+        if not pe_conductor.separated and S_pe < cable.S:
             cable.S_pe = cable.S
         else:
             cable.S_pe = S_pe
@@ -743,30 +779,35 @@ class NetworkTopology:
         configuration settings in self._pe_glob_config.
         """
         if not self._sc_dict:
-            if self._sc_glob_config is None:
+            if self._glob_sc_config is None:
                 warnings.warn(
                     "Short-circuit currents have not been calculated yet. "
                     "These are calculated now with a default short-circuit "
                     "configuration.", category=UserWarning
                 )
-            self.run_short_circuit_calculation()
+            self.run_shortcircuit_calc()
 
-        cables = self._network.find_components(Cable)
+        cables = self._nw_graph.find_components(Cable)
         for cable, *_, end_id in cables:
             pe_conductor = PEConductor(
-                self._pe_conductor_glob_cfg.cond_mat,
-                self._pe_conductor_glob_cfg.insul_mat,
-                self._pe_conductor_glob_cfg.separated
+                self._glob_pe_cfg.cond_mat,
+                self._glob_pe_cfg.insul_mat,
+                self._glob_pe_cfg.separated
             )
             S_pe = pe_conductor.cross_section_area(
                 cable.I_sc_min,
-                self._pe_conductor_glob_cfg.t_interrupt,
-                self._pe_conductor_glob_cfg.mech_protected
+                self._glob_pe_cfg.t_interrupt,
+                self._glob_pe_cfg.mech_protected
             )
-            if not pe_conductor.seperated and S_pe < cable.S:
-                cable.S_pe = cable.S
+            if pe_conductor.separated:
+                if cable.S <= Q_(16, 'mm ** 2'):
+                    cable.S_pe = max(S_pe, cable.S)
+                elif Q_(16, 'mm ** 2') < cable.S <= Q_(35, 'mm ** 2'):
+                    cable.S_pe = max(S_pe, Q_(16, 'mm ** 2'))
+                elif cable.S > Q_(35, 'mm ** 2'):
+                    cable.S_pe = max(S_pe, PEConductor.get_std_csa(cable.S / 2))
             else:
-                cable.S_pe = S_pe
+                cable.S_pe = max(S_pe, cable.S)
 
     # def add_circuit_breakers(self):
     #     """
@@ -792,7 +833,7 @@ class NetworkTopology:
         Returns the absolute and relative voltage drop across the specified
         connection.
         """
-        conn = self._network.get_connection(conn_id)
+        conn = self._nw_graph.get_connection(conn_id)
         dU = Q_(0.0, 'V')
         dU_rel = Q_(0.0, 'pct')
         for comp in conn.components.values():
@@ -844,12 +885,12 @@ class NetworkTopology:
         """
         # Validate target bus exists (Network will also check, but this gives a
         # clearer error here)
-        if bus_id not in self._network.busses:
+        if bus_id not in self._nw_graph.busses:
             raise KeyError(f"Bus '{bus_id}' not found.")
 
         # Infer start bus if not provided
         if start_bus_id is None:
-            start_bus_ids = self._network.get_source_bus_ids()
+            start_bus_ids = self._nw_graph.get_source_bus_ids()
             if len(start_bus_ids) != 1:
                 raise ValueError(
                     "Cannot infer start_bus_id automatically: "
@@ -860,7 +901,7 @@ class NetworkTopology:
             start_bus_id = start_bus_ids[0]
 
         # Path as ordered list of connection IDs from start_bus_id -> bus_id
-        conn_path = self._network.find_connection_path(start_bus_id, bus_id)
+        conn_path = self._nw_graph.find_connection_path(start_bus_id, bus_id)
 
         # Sum voltage drops over the connections on the path
         dU = Q_(0.0, "V")
@@ -945,7 +986,7 @@ class NetworkTopology:
         if source_bus_id is None:
             # Get a source bus ID (it doesn't matter which one, should there be
             # several ones)
-            source_bus_ids = self._network.get_source_bus_ids()
+            source_bus_ids = self._nw_graph.get_source_bus_ids()
             if not source_bus_ids:
                 raise ValueError(
                     "Cannot find a network source bus."
@@ -956,14 +997,14 @@ class NetworkTopology:
         # Get final circuits
         final_bus_ids = [
             final_bus.name for final_bus in
-            self._network.find_reachable_final_busses(source_bus_id)
+            self._nw_graph.find_reachable_final_busses(source_bus_id)
         ]
         final_conn_ids = [
-            self._network.find_connection_path(source_bus_id, bus_id)[-1]
+            self._nw_graph.find_connection_path(source_bus_id, bus_id)[-1]
             for bus_id in final_bus_ids
         ]
         final_circuits = [
-            self._network.get_connection(conn_id)
+            self._nw_graph.get_connection(conn_id)
             for conn_id in final_conn_ids
         ]
 
@@ -981,7 +1022,7 @@ class NetworkTopology:
                 skin_condition=self.skin_condition,
                 final_circuit=True,
                 neutral_distributed=self.neutral_distributed,
-                R_e=self.R_e_consumer
+                R_e=self.R_e
             )
             for cable in cables
         }
