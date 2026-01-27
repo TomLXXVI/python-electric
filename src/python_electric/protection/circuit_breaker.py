@@ -392,7 +392,7 @@ class CircuitBreaker:
         s += f"t_conv  = {self.t_conv.to('h'):~P.1f}\n"
         s += f"I_m_min = {self.I_m_min.to('A'):~P.1f}\n"
         s += f"I_m_max = {self.I_m_max.to('A'):~P.1f}\n"
-        s += f"t_m_lim = {self.t_m.to('ms'):~P.1f}"
+        s += f"t_m     = {self.t_m.to('ms'):~P.1f}"
         return s
 
 

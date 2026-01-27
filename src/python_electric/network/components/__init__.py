@@ -6,4 +6,5 @@ from .cable import *
 from .grid import *
 from .induction_motor import *
 from .transformer import *
+from .generator import *
 from .load import *

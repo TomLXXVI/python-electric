@@ -17,7 +17,7 @@ import numpy as np
 from ... import Quantity, Q_, VoltReference, PhaseSystem
 from ...materials import ConductorMaterial, InsulationMaterial, INSULATION_PROPS
 from ...sizing.cable import *
-from ...protection.earthing_system import EarthingSystem, IndirectContactProtResult
+from ...protection.earthing_system import EarthingSystem, IndirectContactProtectionResult
 from ...protection import CircuitBreaker, earthing_system, check_current_based_selectivity, PEConductor
 from ...calc import voltage_drop
 from ...utils.charts import LineChart
@@ -54,7 +54,7 @@ class Cable(Component):
     ----------
     name: str
         Uniquely identifies the cable in the network.
-    I_b_tot: Quantity
+    I_b_ph: Quantity
         Rated load current through the cable.
     U_l: Quantity = Q_(400, 'V')
         Line-to-line voltage in case of a three-phase system or neutral-to-line
@@ -131,7 +131,7 @@ class Cable(Component):
         Standardized nominal current which is just greater than the rated load
         current of the cable. This current can be used to select the
         current-protective device for the cable.
-    I_b_tot_comp: Quantity
+    I_bc_ph: Quantity
         Compensated load current taking account of the simultaneity factor
         and expansion factor. This current is used to size the cable.
     Z_dict: dict[str, dict[int, Quantity]]
@@ -188,7 +188,7 @@ class Cable(Component):
         the cable that can be protected by this circuit breaker.
     """
     name: str
-    I_b_tot: Quantity
+    I_b_ph: Quantity
     U_l: Quantity = Q_(400, 'V')
     cos_phi: float = 0.8
     L: Quantity = Q_(1.0, 'm')
@@ -215,7 +215,8 @@ class Cable(Component):
 
     circuit_breaker: CircuitBreaker = field(init=False, default=None)
 
-    I_b_tot_comp: Quantity = field(init=False, default=None)
+    I_bc_ph: Quantity = field(init=False, default=None)
+
     I_z: Quantity = field(init=False, default=None)
     I_z0: Quantity = field(init=False, default=None)
     I_n: Quantity = field(init=False, default=None)
@@ -235,7 +236,7 @@ class Cable(Component):
     def __post_init__(self):
         super().__init__(self.name)
 
-        self.I_b_tot_comp = self._get_compensated_load_current()
+        self.I_bc_ph = self.k_simul * self.k_ext * self.I_b_ph
         self.U_ph = self._get_phase_voltage()
 
         i_max = 5
@@ -250,10 +251,7 @@ class Cable(Component):
                     raise e
 
         self.Z_dict = self._calc_impedance_dict()
-        self.dU, self.dU_rel = self.get_voltage_drop(self.U_l, self.I_b_tot, self.cos_phi)
-
-    def _get_compensated_load_current(self) -> Quantity:
-        return self.I_b_tot * self.k_simul * self.k_ext
+        self.dU, self.dU_rel = self.get_voltage_drop(self.U_l, self.I_b_ph, self.cos_phi)
 
     def _get_phase_voltage(self) -> Quantity:
         if self.phase_system.is_ph3:
@@ -281,7 +279,7 @@ class Cable(Component):
     def __collect_user_data(self) -> CableData:
         num_circuits = self.num_other_circuits + self.n_phase
         cd = CableData(
-            I_b=self.I_b_tot_comp.to('A').m / self.n_phase,
+            I_b=self.I_bc_ph.to('A').m / self.n_phase,
             L=self.L.to('m').m,
             conductor_type=self.conductor_material,
             insulation_type=self.insulation_material,
@@ -403,7 +401,7 @@ class Cable(Component):
 
         R = Q_(self.Z_dict["T_n"][1].m.real, 'ohm')
         X = Q_(self.Z_dict["T_n"][1].m.imag, 'ohm')
-        dU = voltage_drop(R, X, I_b / self.n_phase, volt_ref, cos_phi)
+        dU = voltage_drop(R, X, I_b, volt_ref, cos_phi)
 
         U = U_l.to('V')
         if volt_ref == VoltReference.PH3_GROUND_TO_LINE:
@@ -469,10 +467,10 @@ class Cable(Component):
         cb = CircuitBreaker(
             standard=standard,
             category=category,
-            I_b=self.I_b_tot,
-            I_n=self.I_n_tot,
-            I_z=self.I_z_tot,
-            I2t=self.I2t_tot,
+            I_b=self.I_b_ph,
+            I_n=self.I_n_ph,
+            I_z=self.I_z_ph,
+            I2t=self.I2t_ph,
             I_cu=I_cu,
             E_t=E_t,
             k_m=k_m,
@@ -500,7 +498,7 @@ class Cable(Component):
         final_circuit: bool = True,
         neutral_distributed: bool = True,
         R_e: Quantity | None = None
-    ) -> IndirectContactProtResult | None:
+    ) -> IndirectContactProtectionResult | None:
         """
         Checks the protection of the cable against indirect contact.
 
@@ -528,13 +526,13 @@ class Cable(Component):
 
         Returns
         -------
-        IndirectContactProtResult
+        IndirectContactProtectionResult
         """
         if self.earthing_system.is_TN():
             res = earthing_system.TN.check_indirect_contact(
                 U_phase=self.U_ph,
                 L_cable=self.L,
-                S_phase=self.S,
+                S_phase=self.n_phase * self.S,
                 conductor_material=self.conductor_material,
                 I_m_cb= self.circuit_breaker.I_m_max if self.circuit_breaker else None,
                 S_pe = self.S_pe if S_pe is None else S_pe,
@@ -552,7 +550,7 @@ class Cable(Component):
             res = earthing_system.IT.check_indirect_contact(
                 U_phase=self.U_ph,
                 L_cable=self.L,
-                S_phase=self.S,
+                S_phase=self.n_phase * self.S,
                 conductor_material=self.conductor_material,
                 I_m_cb=self.circuit_breaker.I_m_max if self.circuit_breaker else None,
                 S_pe=self.S_pe if S_pe is None else S_pe,
@@ -561,6 +559,11 @@ class Cable(Component):
                 neutral_distributed=neutral_distributed,
                 R_e=R_e
             )
+
+            c1 = res.t_contact_max > self.circuit_breaker.t_m
+            c2 = res.L_max > self.L
+            if c1 or c2:
+                res.passed = True
             return res
 
         return None
@@ -583,13 +586,13 @@ class Cable(Component):
     @property
     def I_b(self) -> Quantity:
         """
-        Returns the load current in a single cable (in the case of multiple
-        parallel single-core cables per phase).
+        Returns the load current in one cable (in case of multiple parallel
+        single-core cables per phase).
         """
-        return self.I_b_tot / self.n_phase
+        return self.I_b_ph / self.n_phase
 
     @property
-    def I_n_tot(self) -> Quantity:
+    def I_n_ph(self) -> Quantity:
         """
         Returns the nominal current through multiple parallel single-core
         cables per phase.
@@ -597,7 +600,7 @@ class Cable(Component):
         return self.I_n * self.n_phase
 
     @property
-    def I_z0_tot(self) -> Quantity:
+    def I_z0_ph(self) -> Quantity:
         """
         Returns the ampacity of multiple parallel single-core cables per phase
         at reference conditions.
@@ -605,14 +608,14 @@ class Cable(Component):
         return self.I_z0 * self.n_phase
 
     @property
-    def I_z_tot(self) -> Quantity:
+    def I_z_ph(self) -> Quantity:
         """
         Returns the ampacity of multiple parallel single-core cables per phase.
         """
         return self.I_z * self.n_phase
 
     @property
-    def I2t_tot(self) -> Quantity:
+    def I2t_ph(self) -> Quantity:
         """
         Returns the Joule-integral of multiple parallel single-core cables per
         phase.
@@ -623,8 +626,8 @@ class Cable(Component):
 def plot_cable(cable: Cable) -> LineChart:
     t_min, t_max = 1e-6, 1e6
     t_5s = 5.0
-    I2t = cable.I2t_tot.to('A ** 2 * s').m
-    I_z = cable.I_z_tot.to('A').m
+    I2t = cable.I2t_ph.to('A ** 2 * s').m
+    I_z = cable.I_z_ph.to('A').m
     I_min = 1e-3
 
     t_adiabatic_ar1 = np.linspace(t_min, t_5s)
@@ -734,14 +737,16 @@ class SelectivityResult:
         if self.t_trip_max is not None:
             s += f"maximum allowable tripping-time upstream circuit breaker: "
             s += f"{self.t_trip_max.to('ms'):~P.0f}\n"
-            s += f"available tripping-delay: "
+            s += f"available tripping-delay margin: "
             s += f"{self.t_margin.to('ms'):~P.0f}"
         return s
 
 
 def check_selectivity(
-    up: Cable,
-    down: Cable,
+    cable_up: Cable,
+    cable_down: Cable,
+    *,
+    neutral_distributed: bool = True
 ) -> SelectivityResult:
     """
     Checks the selectivity between the circuit breaker of the downstream cable
@@ -749,10 +754,12 @@ def check_selectivity(
 
     Parameters
     ----------
-    up: Cable
+    cable_up: Cable
         Upstream cable with circuit breaker connected.
-    down: Cable
+    cable_down: Cable
         Downstream cable with circuit breaker connected.
+    neutral_distributed: bool
+        Indicates whether the neutral is distributed.
 
     Returns
     -------
@@ -795,26 +802,31 @@ def check_selectivity(
           contact (default BB2 – wet skin).
       The actual setting must be chosen below or equal to this value.
     """
-    if up.has_circuit_breaker and down.has_circuit_breaker:
-        cb_up = up.circuit_breaker
-        cb_down = down.circuit_breaker
+    if cable_up.has_circuit_breaker and cable_down.has_circuit_breaker:
+        cb_up = cable_up.circuit_breaker
+        cb_down = cable_down.circuit_breaker
         res = check_current_based_selectivity(cb_down, cb_up)
         if res:
-            if down.I_sc_max < cb_up.I_m_min:
+            if cable_down.I_sc_max < cb_up.I_m_min:
                 return SelectivityResult(total=True, exists=True)
             elif not cb_up.has_adjustable_delay:
                 return SelectivityResult(total=False, exists=True)
 
-            t_cable_max_up = up.I2t / down.I_sc_max ** 2
-            t_cable_min_up = up.I2t / up.I_sc_min ** 2
+            t_cable_max_up = (cable_up.I2t_ph / cable_down.I_sc_max ** 2).to('ms')
+            t_cable_min_up = (cable_up.I2t_ph / cable_up.I_sc_min ** 2).to('ms')
 
-            res = up.check_indirect_contact_protection(final_circuit=False)
-            t_safety_max = res.t_contact_max
+            res = cable_up.check_indirect_contact_protection(
+                S_pe=cable_up.S_pe,
+                final_circuit=False,
+                neutral_distributed=neutral_distributed
+            )
+            t_safety_max = res.t_contact_max.to('ms')
 
             t_trip_max = min(t_cable_max_up, t_cable_min_up, t_safety_max)
-            t_margin = t_trip_max - cb_up.t_m
+            t_margin = t_trip_max.to('ms') - cb_up.t_m.to('ms')
+
             return SelectivityResult(
-                total=True,
+                total=True if t_margin > 0 else False,
                 exists=True,
                 t_trip_max=t_trip_max.to('ms'),
                 t_margin=t_margin.to('ms')

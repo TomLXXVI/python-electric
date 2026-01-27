@@ -90,12 +90,12 @@ class SafetyCurve:
         self._fn_t = interp1d(
             UL_lst, t_lst,
             bounds_error=False,
-            fill_value=(UL_lst[0], UL_lst[-1])
+            fill_value=(t_lst[0], t_lst[-1])
         )
         self._fn_UL = interp1d(
             t_lst, UL_lst,
             bounds_error=False,
-            fill_value=(t_lst[0], t_lst[-1])
+            fill_value=(UL_lst[0], UL_lst[-1])
         )
 
     def max_contact_duration(self, U_f: Quantity) -> Quantity:

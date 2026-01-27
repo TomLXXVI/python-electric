@@ -12,7 +12,7 @@ from ..protection import (
     CircuitBreakerAdvisor,
     CircuitBreakerSuggestion
 )
-from ..protection.earthing_system import IndirectContactProtResult
+from ..protection.earthing_system import IndirectContactProtectionResult
 from .config import SCCalcConfig, PEConductorConfig
 from .graph import NetworkGraph, Connection, Component, TComponent
 from .components import (
@@ -21,7 +21,9 @@ from .components import (
     Cable,
     Grid,
     Transformer,
-    InductionMotor
+    InductionMotor,
+    Generator,
+    SynchronousMotor
 )
 from .components.cable import (
     ConductorMaterial,
@@ -32,7 +34,6 @@ from .components.cable import (
     EarthingSystem,
     PhaseSystem,
     plot_cable,
-    check_selectivity,
     SelectivityResult
 )
 
@@ -125,7 +126,7 @@ class CableInput(ComponentInput):
         self.load = load
         cable = Cable(
             name=self.name,
-            I_b_tot=self.load.I_b,
+            I_b_ph=self.load.I_b,
             U_l=self.load.U_l,
             cos_phi=self.load.cos_phi,
             L=self.L,
@@ -249,6 +250,48 @@ class TransformerInput(ComponentInput):
 
 
 @dataclass
+class GeneratorInput(ComponentInput):
+    name: str
+    U_n: Quantity
+    S_n: Quantity
+    x: float
+    cos_phi: float = 0.8
+    R_to_X: float = 0.15
+    z0_factor: float = 1.0
+
+    def __post_init__(self):
+        super().__init__(self.name)
+
+    def create_component(self) -> Component:
+        gen = Generator(
+            name=self.name,
+            U_n=self.U_n,
+            S_n=self.S_n,
+            x=self.x,
+            cos_phi=self.cos_phi,
+            R_to_X=self.R_to_X,
+            z0_factor=self.z0_factor
+        )
+        return gen
+
+
+@dataclass
+class SynchronousMotorInput(GeneratorInput):
+
+    def create_component(self) -> Component:
+        motor = SynchronousMotor(
+            name=self.name,
+            U_n=self.U_n,
+            S_n=self.S_n,
+            x=self.x,
+            cos_phi=self.cos_phi,
+            R_to_X=self.R_to_X,
+            z0_factor=self.z0_factor
+        )
+        return motor
+
+
+@dataclass
 class LoadInput:
     U_l: Quantity | None = None
     cos_phi: float = 0.8
@@ -256,6 +299,7 @@ class LoadInput:
     P_m: Quantity | None = None
     eta: Quantity = Q_(100, 'pct')
     I_b: Quantity | None = None
+    k_u: float = 1.0
 
     def to_dict(self) -> dict[str, Quantity | float | None]:
         return asdict(self)
@@ -717,10 +761,16 @@ class NetworkTopology:
         plt = plot_cable(cable)
         return plt
 
-    def check_selectivity(self, up: str, down: str) -> SelectivityResult:
-        cable_up, _ = self.get_cable(up)
-        cable_down, _ = self.get_cable(down)
-        res = check_selectivity(cable_up, cable_down)
+    def check_selectivity(self, up_id: str, down_id: str) -> SelectivityResult:
+        from python_electric.network.components import cable
+
+        cable_up, _ = self.get_cable(up_id)
+        cable_down, _ = self.get_cable(down_id)
+
+        res = cable.check_selectivity(
+            cable_up, cable_down,
+            neutral_distributed=self.neutral_distributed
+        )
         return res
 
     def size_pe_conductor(
@@ -921,7 +971,7 @@ class NetworkTopology:
         final_circuit: bool = True,
         neutral_distributed: bool = True,
         R_e: Quantity | None = None
-    ) -> IndirectContactProtResult:
+    ) -> IndirectContactProtectionResult:
         """
         Checks whether the specified cable is protected against indirect
         contact.
@@ -949,7 +999,7 @@ class NetworkTopology:
 
         Returns
         -------
-        IndirectContactProtResult
+        IndirectContactProtectionResult
         """
         cable, _ = self.get_cable(cable_id)
         res = cable.check_indirect_contact_protection(
@@ -964,7 +1014,7 @@ class NetworkTopology:
     def check_final_circuits(
         self,
         source_bus_id: str | None = None
-    ) -> dict[str, IndirectContactProtResult]:
+    ) -> dict[str, IndirectContactProtectionResult]:
         """
         Checks the protection against indirect contact of all the final
         circuits in the network.
@@ -976,7 +1026,7 @@ class NetworkTopology:
 
         Returns
         -------
-        dict[str, IndirectContactProtResult]
+        dict[str, IndirectContactProtectionResult]
 
         Raises
         ------

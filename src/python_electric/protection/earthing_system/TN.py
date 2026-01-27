@@ -7,7 +7,7 @@ from python_electric.protection import SafetyCurve
 from .earthing_system import (
     EarthingSystem,
     get_max_allow_disconnect_time,
-    IndirectContactProtResult
+    IndirectContactProtectionResult
 )
 
 __all__ = [
@@ -229,7 +229,7 @@ def check_indirect_contact(
     S_pe: Quantity | None = None,
     skin_condition: str = "BB2",
     final_circuit: bool = True
-) -> IndirectContactProtResult:
+) -> IndirectContactProtectionResult:
     """
     Determines the requirements so that a circuit breaker would also protect
     against indirect contact in a low-voltage distribution network with
@@ -265,7 +265,7 @@ def check_indirect_contact(
 
     Returns
     -------
-    IndirectContactProtResult
+    IndirectContactProtectionResult
     """
     fault = LineToExposedConductivePartFault(
         U_phase=U_phase,
@@ -292,7 +292,7 @@ def check_indirect_contact(
         t_c_max_iec = get_max_allow_disconnect_time(U_phase, EarthingSystem.TN)
         t_c_max = min(t_c_max.to('ms'), t_c_max_iec.to('ms'))
 
-    return IndirectContactProtResult(
+    return IndirectContactProtectionResult(
         I_f=fault.I_fault,
         U_f=fault.U_fault,
         L_max=L_max,
@@ -307,7 +307,7 @@ def check_earthing_resistance(
     R_e_extr: Quantity = Q_(5, 'ohm'),
     skin_condition: str = "BB2",
     final_circuit: bool = True
-) -> IndirectContactProtResult:
+) -> IndirectContactProtectionResult:
     """
     Determines the requirements regarding the earthing resistance of the
     TN-earthed network by considering an insulation fault via an extraneous
@@ -331,7 +331,7 @@ def check_earthing_resistance(
 
     Returns
     -------
-    IndirectContactProtResult
+    IndirectContactProtectionResult
     """
     fault = LineToExtraneousConductivePartFault(U_phase, R_e, R_e_extr, skin_condition)
     if final_circuit:
@@ -339,7 +339,7 @@ def check_earthing_resistance(
         t_c_max = min(fault.t_contact_max.to('ms'), t_c_max_iec.to('ms'))
     else:
         t_c_max = fault.t_contact_max
-    return IndirectContactProtResult(
+    return IndirectContactProtectionResult(
         I_f=fault.I_fault,
         U_f=fault.U_fault,
         R_e_max=fault.R_e_max,

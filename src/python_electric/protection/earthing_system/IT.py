@@ -5,7 +5,7 @@ from ... import calc
 from ...materials import ConductorMaterial
 from ..safety_curve import SafetyCurve
 from .earthing_system import (
-    IndirectContactProtResult,
+    IndirectContactProtectionResult,
     get_max_allow_disconnect_time,
     EarthingSystem
 )
@@ -314,7 +314,7 @@ def check_indirect_contact(
     final_circuit: bool = True,
     neutral_distributed: bool = True,
     R_e: Quantity | None = None
-) -> IndirectContactProtResult:
+) -> IndirectContactProtectionResult:
     """
     Determines the requirements so that a circuit breaker would also protect
     against indirect contact in a low-voltage network with IT-earthing system in
@@ -362,7 +362,7 @@ def check_indirect_contact(
 
     Returns
     -------
-    IndirectContactProtResult
+    IndirectContactProtectionResult
     """
     fault = ITDoubleFault(
         U_phase=U_phase,
@@ -379,15 +379,18 @@ def check_indirect_contact(
     else:
         L_max = None
         R_pe_max = None
+
     safety_curve = SafetyCurve(
         voltage_type="AC",
         skin_condition=skin_condition
     )
     t_c_max = safety_curve.max_contact_duration(fault.U_fault)
+
     if final_circuit:
         t_c_max_iec = get_max_allow_disconnect_time(U_phase, EarthingSystem.TN)
         t_c_max = min(t_c_max.to('ms'), t_c_max_iec.to('ms'))
-    return IndirectContactProtResult(
+
+    return IndirectContactProtectionResult(
         I_f=fault.I_fault,
         U_f=fault.U_fault,
         L_max=L_max,
@@ -403,7 +406,7 @@ def check_earthing_resistance(
     skin_condition: str = "BB2",
     final_circuit: bool = True,
     neutral_distributed: bool = True
-) -> IndirectContactProtResult:
+) -> IndirectContactProtectionResult:
     """
     Determines the requirements regarding the earthing resistance of the
     consumer installation by considering a second insulation fault via an
@@ -430,7 +433,7 @@ def check_earthing_resistance(
 
     Returns
     -------
-    IndirectContactProtResult
+    IndirectContactProtectionResult
     """
     fault = ITExtraneousConductivePartFault(
         U_phase,
@@ -443,7 +446,7 @@ def check_earthing_resistance(
         t_c_max = min(fault.t_contact_max.to('ms'), t_c_max_iec.to('ms'))
     else:
         t_c_max = fault.t_contact_max
-    return IndirectContactProtResult(
+    return IndirectContactProtectionResult(
         I_f=fault.I_fault,
         U_f=fault.U_fault,
         R_e_max=fault.R_e_max,

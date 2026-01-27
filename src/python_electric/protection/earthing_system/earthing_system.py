@@ -6,7 +6,7 @@ from python_electric import Quantity, Q_
 
 __all__ = [
     "EarthingSystem",
-    "IndirectContactProtResult",
+    "IndirectContactProtectionResult",
     "get_max_allow_disconnect_time"
 ]
 
@@ -71,7 +71,7 @@ def get_max_allow_disconnect_time(
 
 
 @dataclass
-class IndirectContactProtResult:
+class IndirectContactProtectionResult:
     """
     Holds the results returned from methods of `AbstractEarthingSystem`-derived
     classes that check protection against electric shock due to indirect
