@@ -171,11 +171,7 @@ class UnSymmetricalFault(ABC):
         """
         self._faulted_node_ID = node_ID
 
-        if self._nw0 is not None:
-            self._faulted_node_index0 = self._nw0.get_node_index(node_ID)
-        else:
-            self._faulted_node_index0 = None
-        
+        self._faulted_node_index0 = self._nw0.get_node_index(node_ID)
         self._faulted_node_index1 = self._nw1.get_node_index(node_ID)
         self._faulted_node_index2 = self._nw2.get_node_index(node_ID)
 
@@ -208,11 +204,7 @@ class UnSymmetricalFault(ABC):
         node = self._nw1.get_node(ID)
         i = node.index
         
-        if self._nw0 is not None:
-            Z_ik0 = self._nw0.get_matrix_element(i, k0)
-        else:
-            Z_ik0 = 0.0
-        
+        Z_ik0 = self._nw0.get_matrix_element(i, k0)
         Z_ik1 = self._nw1.get_matrix_element(i, k1)
         Z_ik2 = self._nw2.get_matrix_element(i, k2)
         
@@ -249,13 +241,10 @@ class UnSymmetricalFault(ABC):
         Y_b1 = 1 / Z_b1
         Y_b2 = 1 / Z_b2
         
-        if self._nw0 is not None:
-            branch_0 = self._nw0.get_branch((branch_1.start_node.ID, branch_1.end_node.ID))
-            Z_b0 = branch_0.impedance
-            Y_b0 = 1 / Z_b0
-        else:
-            Y_b0 = float('inf')
-        
+        branch_0 = self._nw0.get_branch((branch_1.start_node.ID, branch_1.end_node.ID))
+        Z_b0 = branch_0.impedance
+        Y_b0 = 1 / Z_b0
+
         Y_b_012 = np.diagflat([Y_b0, Y_b1, Y_b2])
         if i == REF_NODE_INDEX:
             if branch_1.has_source:

@@ -386,12 +386,13 @@ def _map_busses_to_transformer_sides(
     U_base: dict[str, Quantity],
 ) -> tuple[str, str]:
     """
-    Map endpoint busses to transformer primary/secondary sides based on base
-    voltage.
+    Map endpoint busses to transformer primary/secondary sides.
 
-    Returns (pri_bus, sec_bus).
-
-    Raises if mapping is ambiguous.
+    Strategy:
+    1) If U_lp and U_ls are different: map by comparing bus base voltages.
+    2) If U_lp ~= U_ls (e.g. 400/400 isolation transformer): voltage mapping is
+       ambiguous; fall back to terminal naming conventions ('pri'/'sec').
+    3) If still ambiguous: deterministic fallback (bus_a=pri, bus_b=sec).
     """
     Ua = U_base[bus_a]
     Ub = U_base[bus_b]
@@ -399,25 +400,59 @@ def _map_busses_to_transformer_sides(
     U_lp = trafo.U_lp
     U_ls = trafo.U_ls
 
-    # Determine which bus matches which transformer side by voltage.
-    a_is_lp = _is_same_voltage(Ua, U_lp)
-    a_is_ls = _is_same_voltage(Ua, U_ls)
-    b_is_lp = _is_same_voltage(Ub, U_lp)
-    b_is_ls = _is_same_voltage(Ub, U_ls)
+    # ------------------------------------------------------------------
+    # Case 1: normal transformer with different voltages -> map by voltage
+    # ------------------------------------------------------------------
+    if not _is_same_voltage(U_lp, U_ls):
+        a_is_lp = _is_same_voltage(Ua, U_lp)
+        a_is_ls = _is_same_voltage(Ua, U_ls)
+        b_is_lp = _is_same_voltage(Ub, U_lp)
+        b_is_ls = _is_same_voltage(Ub, U_ls)
 
-    # Common case: one bus matches lp and the other matches ls.
-    if a_is_lp and b_is_ls:
+        if a_is_lp and b_is_ls:
+            return bus_a, bus_b
+        if a_is_ls and b_is_lp:
+            return bus_b, bus_a
+
+        raise ValueError(
+            f"Cannot map busses {bus_a!r}-{bus_b!r} to transformer sides based on "
+            f"voltage. Bus voltages: {Ua}, {Ub}; Transformer: U_lp={U_lp}, U_ls={U_ls}."
+        )
+
+    # ------------------------------------------------------------------
+    # Case 2: U_lp ~= U_ls (e.g. 400/400) -> map by naming convention
+    # ------------------------------------------------------------------
+    a_l = bus_a.lower()
+    b_l = bus_b.lower()
+
+    def _is_pri(s: str) -> bool:
+        return ("pri" in s) or s.endswith("_p") or s.endswith("-p")
+
+    def _is_sec(s: str) -> bool:
+        return ("sec" in s) or s.endswith("_s") or s.endswith("-s")
+
+    a_pri, a_sec = _is_pri(a_l), _is_sec(a_l)
+    b_pri, b_sec = _is_pri(b_l), _is_sec(b_l)
+
+    if a_pri and b_sec:
         return bus_a, bus_b
-    if a_is_ls and b_is_lp:
+    if a_sec and b_pri:
         return bus_b, bus_a
 
-    # If both busses are on the same voltage (e.g. modeling artifact), refuse
-    # for MVP.
-    raise ValueError(
-        f"Cannot map busses {bus_a!r}-{bus_b!r} to transformer sides based on "
-        f"voltage. Bus voltages: {Ua}, {Ub}; Transformer: U_lp={U_lp}, "
-        f"U_ls={U_ls}."
-    )
+    # If only one side is hinted, still decide
+    if a_pri and not b_pri:
+        return bus_a, bus_b
+    if b_pri and not a_pri:
+        return bus_b, bus_a
+    if a_sec and not b_sec:
+        return bus_b, bus_a  # a looks sec -> b is pri
+    if b_sec and not a_sec:
+        return bus_a, bus_b  # b looks sec -> a is pri
+
+    # ------------------------------------------------------------------
+    # Case 3: last resort deterministic fallback
+    # ------------------------------------------------------------------
+    return bus_a, bus_b
 
 
 def _trafo_blocks_z0_transfer(trafo: Transformer) -> bool:
@@ -544,7 +579,8 @@ class SequenceNetworkBuilder:
 
         self._bfs_expand()
 
-        self._assert_all_connections_processed()
+        # self._assert_all_connections_processed()
+        self._finalize_connectivity()
 
         # Optional: add induction motor source branches ground->bus (sequence=1 only).
         if self.sequence == 1 and self.cfg.include_induction_motor_sources:
@@ -707,6 +743,39 @@ class SequenceNetworkBuilder:
                 "reference (GROUND) or no grounding exists for Z0. "
                 f"Missing connections: {sorted(missing)}"
             )
+
+    def _finalize_connectivity(self) -> None:
+        """Finalize connectivity after BFS expansion.
+
+        For sequence 1 and 2 we require that the entire network graph is
+        processed, because these sequence networks are expected to be fully
+        connected to the reference through sources.
+
+        For sequence 0, disconnected islands are *normal* (delta windings,
+        ungrounded neutrals, IT parts, ...). The BFS expansion is intentionally
+        seeded from ground shunts, so any island not connected to ground is
+        irrelevant for the Z0 network and will be ignored.
+        """
+        missing = set(self.nwgraph.connections.keys()) - self.processed_connections
+        if not missing:
+            return
+
+        if self.sequence == 0:
+            logger.warning(
+                "Z0 network is disconnected: %d connection(s) were not added because "
+                "they are not connected to the reference (GROUND) in zero sequence. "
+                "This is usually expected for delta/ungrounded parts. Missing: %s",
+                len(missing),
+                sorted(missing),
+            )
+            return
+
+        raise MissingConnectionError(
+            "Not all connections could be added to the short-circuit network. "
+            "Likely the network has a disconnected island not connected to the "
+            "reference (GROUND). "
+            f"Missing connections: {sorted(missing)}"
+        )
 
     # --------------------------------------------------------------------------
     # SCNetwork write helpers

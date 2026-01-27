@@ -1,4 +1,4 @@
-from ... import Quantity
+from ... import Quantity, Q_
 from ...short_circuit.network import Network as SCNetwork
 from ...short_circuit.network import PerUnitSystem
 from ...short_circuit.faults import ThreePhaseFault, LineToGroundFault, LineToLineFault
@@ -69,7 +69,8 @@ class ShortCircuitCalc:
             self.nw2: SCNetwork | None = None
             self.nw0: SCNetwork | None = None
 
-            self._fault_type = LineToLineFault if self.nw.earthing_system.is_IT() else LineToGroundFault
+            # self._fault_type = LineToLineFault if self.nw.earthing_system.is_IT() else LineToGroundFault
+            self._fault_type = LineToGroundFault
             self._fault = None
 
             self._create_sequence_networks()
@@ -103,7 +104,11 @@ class ShortCircuitCalc:
 
         def __call__(self, bus_id: str) -> Quantity:
             self._fault.set_faulted_node(bus_id)
-            If_pu = self._fault.get_fault_current_abc()
+            try:
+                If_pu = self._fault.get_fault_current_abc()
+            except TypeError:
+                # Happens when a bus is on a disconnected island in the Z0-network.
+                return Q_(0.0, 'A')
             bus = self.nw.graph.busses[bus_id]
             pu_sys = PerUnitSystem(self.config.S_base, bus.U_base)
             if issubclass(self._fault_type, LineToGroundFault):

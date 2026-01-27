@@ -1,6 +1,6 @@
 from typing import Iterator, Sequence
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from enum import StrEnum
 import warnings
 
@@ -44,12 +44,7 @@ __all__ = [
     "GridInput",
     "InductionMotorInput",
     "TransformerInput",
-    "LoadInput"
 ]
-
-
-class CircuitBreakerAdvisorWarning(Warning):
-    pass
 
 
 class ComponentInput(ABC):
@@ -291,20 +286,6 @@ class SynchronousMotorInput(GeneratorInput):
         return motor
 
 
-@dataclass
-class LoadInput:
-    U_l: Quantity | None = None
-    cos_phi: float = 0.8
-    P_e: Quantity | None = None
-    P_m: Quantity | None = None
-    eta: Quantity = Q_(100, 'pct')
-    I_b: Quantity | None = None
-    k_u: float = 1.0
-
-    def to_dict(self) -> dict[str, Quantity | float | None]:
-        return asdict(self)
-
-
 class NetworkTopology:
     """
     Central class for designing a low-voltage network.
@@ -370,7 +351,7 @@ class NetworkTopology:
 
         # Configuration settings for the min/max short-circuit calculation
         self._glob_sc_config = sc_config
-        self._sccalc = None
+        self.sccalc = None
         self._sc_dict: dict[str, NetworkTopology.ShortCircuitResult] = {}  # bus_id -> min/max short-circuit current
 
         # Global configuration settings applied to all PE-conductors
@@ -384,7 +365,7 @@ class NetworkTopology:
         self._comp_register: dict[str, str] = {}
 
         # Loads are associated with connections -> see add_connection()
-        self._loads: dict[str, LoadInput | None] = {}
+        self._loads: dict[str, Load | None] = {}
 
         # Core network graph object.
         self._nw_graph = NetworkGraph(name)
@@ -419,7 +400,7 @@ class NetworkTopology:
         conn_id: str,
         start_id: str = GROUND_ID,
         end_id: str = GROUND_ID,
-        load_data: LoadInput | None = None
+        load: Load | None = None
     ) -> None:
         """
         Adds a new connection to the low-voltage network.
@@ -432,7 +413,7 @@ class NetworkTopology:
             Identifies the network bus where the connection leaves.
         end_id: str
             Identifies the network bus where the connection arrives.
-        load_data: LoadInput, optional
+        load: LoadInput, optional
             Contains the user-input data about the load that flows through this
             connection.
 
@@ -441,11 +422,16 @@ class NetworkTopology:
         None
         """
         if start_id == end_id:
-            raise ValueError("A connection cannot have equal start_id and end_id.")
+            raise ValueError(
+                "A connection cannot have equal start_id and end_id."
+            )
         self._nw_graph.add_connection(conn_id, start_id, end_id)
-        if load_data is not None:
-            load_data.U_l = load_data.U_l if load_data.U_l is not None else self.U_lv
-        self._loads[conn_id] = load_data
+        if load is not None:
+            load.U_l = (
+                load.U_l if load.U_l is not None
+                else self.U_lv
+            )
+        self._loads[conn_id] = load
 
     def add_component(
         self,
@@ -467,26 +453,19 @@ class NetworkTopology:
         None
         """
         try:
-            load_data = self._loads[conn_id]
+            load = self._loads[conn_id]
         except KeyError:
             raise KeyError(f"Connection '{conn_id}' not found.")
 
         comp = None
 
-        if isinstance(comp_data, (BusBarInput, CableInput)):
+        if isinstance(comp_data, (BusBarInput, CableInput, TransformerInput)):
             if isinstance(comp_data, CableInput):
                 if comp_data.earthing_system is None:
                     comp_data.earthing_system = self.earthing_system
-            comp = comp_data.create_component(Load(**load_data.to_dict()))
-
-        if isinstance(comp_data, GridInput):
+            comp = comp_data.create_component(load)
+        elif isinstance(comp_data, ComponentInput):
             comp = comp_data.create_component()
-
-        if isinstance(comp_data, InductionMotorInput):
-            comp = comp_data.create_component()
-
-        if isinstance(comp_data, TransformerInput):
-            comp = comp_data.create_component(Load(**load_data.to_dict()))
 
         if comp is None and comp_data.name:
             raise ValueError(f"Failed to add component '{comp_data.name}' to network.")
@@ -552,11 +531,9 @@ class NetworkTopology:
     def get_load(self, conn_id: str) -> Load:
         """Returns the Load object associated with the specified connection."""
         try:
-            load_data = self._loads[conn_id]
+            load = self._loads[conn_id]
         except KeyError:
             raise KeyError(f"No load data available with connection '{conn_id}'.")
-
-        load = Load(**load_data.to_dict())
         return load
 
     def get_shortcircuit_current(
@@ -592,22 +569,24 @@ class NetworkTopology:
         if isinstance(sc_config, SCCalcConfig):
             self._glob_sc_config = sc_config
 
-        if self._sccalc is None or sc_config is not None:
-            self._sccalc = ShortCircuitCalc(self, self._glob_sc_config)
+        if self.sccalc is None or sc_config is not None:
+            self.sccalc = ShortCircuitCalc(self, self._glob_sc_config)
 
         if sc_case == self.ShortCircuitCase.MAX:
             try:
-                return self._sccalc.max(bus_id)
-            except:
+                return self.sccalc.max(bus_id)
+            except Exception as err:
                 raise ValueError(
                     f"Short-circuit calculation failed on bus '{bus_id}'."
+                    f"Got exception: {type(err).__name__} - {err}"
                 )
         elif sc_case == self.ShortCircuitCase.MIN:
             try:
-                return self._sccalc.min(bus_id)
-            except:
+                return self.sccalc.min(bus_id)
+            except Exception as err:
                 raise ValueError(
-                    f"Short-circuit calculation failed on bus '{bus_id}'."
+                    f"Short-circuit calculation failed on bus '{bus_id}'. "
+                    f"Got exception: {type(err).__name__} - {err}"
                 )
         else:
             raise ValueError(f"Unknown short-circuit case: '{sc_case}'.")
