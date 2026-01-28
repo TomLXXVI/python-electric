@@ -137,9 +137,9 @@ class CircuitBreaker:
 
         self.I_z = I_z.to('A')
 
-        self.joule_integral = None
+        self.I2t = None
         if I2t is not None:
-            self.joule_integral = I2t.to('A ** 2 * s')
+            self.I2t = I2t.to('A ** 2 * s')
 
         self.I_cu = I_cu.to('A')
 
@@ -333,51 +333,59 @@ class CircuitBreaker:
         self.I_cu.ito('A')
         self.I_m_min.ito('A')
 
+        # Check the ultimate breaking capacity of circuit breaker.
         if I_sc_max <= self.I_cu:
             pass
         else:
             warnings.warn(
-                f"I_sc_max ({I_sc_max:~P.0f}) > "
-                f"ultimate breaking capacity ({self.I_cu:~P.0f}).",
+                f"I_sc_max ({I_sc_max:~P.0f}) > I_cu ({self.I_cu:~P.0f})",
                 category=ProtectionWarning
             )
             return False
 
+        # Check whether the circuit breaker still recognizes I_sc_min as being a
+        # short-circuit (ensure magnetic tripping).
         if I_sc_min >= self.I_m_min:
             pass
         else:
             warnings.warn(
-                f"I_sc_min ({I_sc_min:~P.0f} < "
-                f"minimum short-circuit tripping current ({self.I_m_min:~P.0f}).",
+                f"I_sc_min ({I_sc_min:~P.0f} < I_m_min ({self.I_m_min:~P.0f})",
                 category=ProtectionWarning
             )
             return False
 
-        if self.joule_integral is not None:
-            self.joule_integral.ito('A ** 2 * s')
+        if self.I2t is not None:
+            self.I2t.ito('A ** 2 * s')
 
+            # Check whether the circuit breaker prevents excessive heating of
+            # the cable in case a short-circuit with the maximum current should
+            # occur.
             if self.E_t is not None:
                 E_through = self.E_t.to('A ** 2 * s')
             else:
                 E_through = I_sc_max ** 2 * self.t_m.to('s')
 
-            if self.joule_integral >= E_through:
+            if self.I2t >= E_through:
                 pass
             else:
                 warnings.warn(
                     f"Let-through energy ({E_through:~P.4e}) > "
-                    f"Joule-integral of the cable ({self.joule_integral:~P.4e}).",
+                    f"Joule-integral (I2t) of cable ({self.I2t:~P.4e})",
                     category=ProtectionWarning
                 )
                 return False
 
-            t_allow = self.joule_integral / (I_sc_min ** 2)
+            # Check whether the circuit breaker is also able to magnetically
+            # interrupt I_sc_min in time to prevent too excessive heating of the
+            # cable.
+            t_allow = self.I2t / (I_sc_min ** 2)
             if self.t_m.to('s') <= t_allow.to('s'):
                 pass
             else:
                 warnings.warn(
-                    f"Magnetic tripping-time limit ({self.t_m.to('s'):~P.0f}) > "
-                    f"allowable fault duration ({t_allow.to('s'):~P.0f}).",
+                    f"Magnetic tripping-time limit t_m "
+                    f"({self.t_m.to('s'):~P.0f}) > allowable fault duration "
+                    f"({t_allow.to('s'):~P.0f}).",
                     category=ProtectionWarning
                 )
                 return False

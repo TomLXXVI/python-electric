@@ -173,7 +173,7 @@ class CircuitBreakerAdvisor:
 
         # I2t may be None for some cases; we allow it because CircuitBreaker
         # accepts I2t=None. But the check might be less strict in that case.
-        _ = getattr(self.cable, "I2t_tot", None)
+        _ = getattr(self.cable, "I2t_ph", None)
 
         # Ensure series not empty
         if not self.icu_series:

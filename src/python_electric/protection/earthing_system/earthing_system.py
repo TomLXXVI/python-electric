@@ -112,29 +112,29 @@ class IndirectContactProtectionResult:
     passed: bool = field(init=False, default=False)
 
     def __str__(self) -> str:
-        s = [f"\tpassed: {self.passed}"]
+        s = [f"passed: {self.passed}"]
         if self.I_f is not None:
-            s.append(f"\tfault current: {self.I_f.to('A'):~P.1f}")
+            s.append(f"fault current: {self.I_f.to('A'):~P.1f}")
         if self.U_f is not None:
-            s.append(f"\tfault voltage: {self.U_f.to('V'):~P.1f}")
+            s.append(f"fault voltage: {self.U_f.to('V'):~P.1f}")
         if self.t_contact_max is not None:
             s.append(
-                f"\tmaximum allowable fault duration: "
+                f"maximum allowable fault duration: "
                 f"{self.t_contact_max.to('ms'):~P.0f}"
             )
         if self.L_max is not None:
             s.append(
-                f"\tmaximum allowable cable length: "
+                f"maximum allowable cable length: "
                 f"{self.L_max.to('m'):~P.0f}"
             )
         if self.R_e_max is not None:
             s.append(
-                f"\tmaximum allowable earth-spreading resistance: "
+                f"maximum allowable earth-spreading resistance: "
                 f"{self.R_e_max.to('ohm'):~P.0f}"
             )
         if self.R_pe_max is not None:
             s.append(
-                f"\tmaximum allowable resistance of the PE-conductor(s): "
+                f"maximum allowable resistance of the PE-conductor(s): "
                 f"{self.R_pe_max.to('mohm'):~P.0f}"
             )
         return "\n".join(s)

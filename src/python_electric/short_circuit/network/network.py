@@ -424,14 +424,16 @@ class Network:
         else:
             start_node = self.get_node(ID[0])
             end_node = self.get_node(ID[1])
-            open_branch = self._create_branch(
-                start_node.index, end_node.index,
-                math.inf
-            )
+            # open_branch = self._create_branch(
+            #     start_node.index, end_node.index,
+            #     math.inf
+            # )
+            open_branch = Branch(-1, start_node, end_node, math.inf)
             return open_branch
 
     def get_paths(self, node_ID: str) -> List[CurrentPath]:
-        """Returns all current paths between the reference node and the node
+        """
+        Returns all current paths between the reference node and the node
         with the specified ID.
         """
         

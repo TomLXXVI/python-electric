@@ -1,10 +1,19 @@
-from ... import Quantity, Q_
+from typing import Type
+import warnings
+
 from ...short_circuit.network import Network as SCNetwork
 from ...short_circuit.network import PerUnitSystem
-from ...short_circuit.faults import ThreePhaseFault, LineToGroundFault, LineToLineFault
+from ...short_circuit.faults import (
+    ThreePhaseFault,
+    UnSymmetricalFault,
+    LineToGroundFault,
+    LineToLineFault,
+    AbsentNodeError,
+    AbsentNodeWarning
+)
 from ..config import SCCalcConfig
-from ..topology import NetworkTopology
-from .sequence_network_builder import build_sequence_network, MissingConnectionError
+from ..topology import NetworkTopology, ShortCircuitResult
+from .sequence_network_builder import build_sequence_network
 
 
 __all__ = ["ShortCircuitCalc"]
@@ -17,6 +26,7 @@ class ShortCircuitCalc:
         def __init__(self, network: NetworkTopology, cfg: SCCalcConfig | None) -> None:
             self.nw = network
             if isinstance(cfg, SCCalcConfig):
+                self.config = cfg
                 self.config.sc_case = "MAX"
             else:
                 self.config = SCCalcConfig("MAX")
@@ -40,13 +50,16 @@ class ShortCircuitCalc:
                 c=self.config.volt_factor_max
             )
 
-        def __call__(self, bus_id: str) -> Quantity:
+        def __call__(self, bus_id: str) -> ShortCircuitResult:
             self._fault.set_faulted_node(bus_id)
             If_pu = self._fault.get_fault_current()
             bus = self.nw.graph.busses[bus_id]
             pu_sys = PerUnitSystem(self.config.S_base, bus.U_base)
             If = pu_sys.get_actual_current(If_pu)
-            return abs(If)
+            return ShortCircuitResult(
+                max=abs(If),
+                fault_type_max=self._fault.__class__.__name__
+            )
 
         def print_seq_network(self) -> None:
             for branch in self.nw1.branches:
@@ -61,6 +74,7 @@ class ShortCircuitCalc:
         def __init__(self, network: NetworkTopology, cfg: SCCalcConfig | None) -> None:
             self.nw = network
             if isinstance(cfg, SCCalcConfig):
+                self.config = cfg
                 self.config.sc_case = "MIN"
             else:
                 self.config = SCCalcConfig("MIN")
@@ -69,12 +83,14 @@ class ShortCircuitCalc:
             self.nw2: SCNetwork | None = None
             self.nw0: SCNetwork | None = None
 
-            # self._fault_type = LineToLineFault if self.nw.earthing_system.is_IT() else LineToGroundFault
-            self._fault_type = LineToGroundFault
-            self._fault = None
+            self._standard_fault_type = LineToGroundFault
+            self._fallback_fault_type = LineToLineFault
 
             self._create_sequence_networks()
-            self._create_fault()
+
+            self._standard_fault = self._create_fault(self._standard_fault_type)
+            self._fallback_fault = self._create_fault(self._fallback_fault_type)
+            self._fault = self._standard_fault
 
         def _create_sequence_networks(self) -> None:
             self.nw1 = build_sequence_network(
@@ -87,35 +103,43 @@ class ShortCircuitCalc:
                 sequence=2,
                 config=self.config
             )
-            try:
-                self.nw0 = build_sequence_network(
-                    self.nw.graph,
-                    sequence=0,
-                    config=self.config
-                )
-            except MissingConnectionError:
-                self.nw0 = None
+            self.nw0 = build_sequence_network(
+                self.nw.graph,
+                sequence=0,
+                config=self.config
+            )
 
-        def _create_fault(self) -> None:
-            self._fault = self._fault_type(
+        def _create_fault(
+            self,
+            fault_type: Type[UnSymmetricalFault]
+        ) -> UnSymmetricalFault:
+            return fault_type(
                 [self.nw0, self.nw1, self.nw2],
                 c=self.config.volt_factor_min
             )
 
-        def __call__(self, bus_id: str) -> Quantity:
-            self._fault.set_faulted_node(bus_id)
-            try:
-                If_pu = self._fault.get_fault_current_abc()
-            except TypeError:
-                # Happens when a bus is on a disconnected island in the Z0-network.
-                return Q_(0.0, 'A')
+        def __call__(self, bus_id: str) -> ShortCircuitResult:
+            self._fault = self._standard_fault
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=AbsentNodeWarning)
+                try:
+                    self._fault.set_faulted_node(bus_id)
+                except AbsentNodeError:
+                    self._fault = self._fallback_fault
+                    try:
+                        self._fault.set_faulted_node(bus_id)
+                    except AbsentNodeError as err:
+                        raise err
+
+            If_abc_pu = self._fault.get_fault_current_abc()
             bus = self.nw.graph.busses[bus_id]
             pu_sys = PerUnitSystem(self.config.S_base, bus.U_base)
-            if issubclass(self._fault_type, LineToGroundFault):
-                If = pu_sys.get_actual_current(If_pu.flatten()[0])
-            else:
-                If = pu_sys.get_actual_current(If_pu.flatten()[1])
-            return abs(If)
+            If_abc = pu_sys.get_actual_current(If_abc_pu.flatten())
+            # noinspection PyUnresolvedReferences
+            return ShortCircuitResult(
+                min=max(abs(If_abc[0]), abs(If_abc[1]), abs(If_abc[2])),
+                fault_type_min=self._fault.__class__.__name__
+            )
 
         def print_seq_network(self, seq: int) -> None:
             if seq == 1:

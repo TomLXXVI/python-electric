@@ -44,7 +44,16 @@ __all__ = [
     "GridInput",
     "InductionMotorInput",
     "TransformerInput",
+    "ShortCircuitResult"
 ]
+
+
+@dataclass
+class ShortCircuitResult:
+    max: Quantity | None = None
+    min: Quantity | None = None
+    fault_type_min: str = ""
+    fault_type_max: str = ""
 
 
 class ComponentInput(ABC):
@@ -296,15 +305,10 @@ class NetworkTopology:
         MAX = "MAX"
         MIN = "MIN"
 
-    @dataclass
-    class ShortCircuitResult:
-        max: Quantity
-        min: Quantity
-
     def __init__(
         self,
         name: str,
-        U_lv: Quantity,
+        U_n: Quantity,
         sc_config: SCCalcConfig | None = None,
         pe_config: PEConductorConfig | None = None,
         earthing_system: EarthingSystem = EarthingSystem.TN,
@@ -320,7 +324,7 @@ class NetworkTopology:
         ----------
         name: str
             Name for the network.
-        U_lv: Quantity
+        U_n: Quantity
             Nominal network voltage.
         sc_config: SCCalcConfig, optional
             Global configuration settings for the maximum/minimum short-circuit
@@ -342,7 +346,7 @@ class NetworkTopology:
             used in an IT-earthing system.
         """
         self.name = name
-        self.U_lv = U_lv
+        self.U_n = U_n
         self.earthing_system = earthing_system
         self.cb_standard = cb_standard
         self.skin_condition = skin_condition
@@ -352,7 +356,7 @@ class NetworkTopology:
         # Configuration settings for the min/max short-circuit calculation
         self._glob_sc_config = sc_config
         self.sccalc = None
-        self._sc_dict: dict[str, NetworkTopology.ShortCircuitResult] = {}  # bus_id -> min/max short-circuit current
+        self._sc_dict: dict[str, ShortCircuitResult] = {}  # bus_id -> min/max short-circuit current
 
         # Global configuration settings applied to all PE-conductors
         if pe_config is None:
@@ -429,7 +433,7 @@ class NetworkTopology:
         if load is not None:
             load.U_l = (
                 load.U_l if load.U_l is not None
-                else self.U_lv
+                else self.U_n
             )
         self._loads[conn_id] = load
 
@@ -541,7 +545,7 @@ class NetworkTopology:
         bus_id: str,
         sc_case: ShortCircuitCase,
         sc_config: SCCalcConfig | None = None
-    ) -> Quantity:
+    ) -> ShortCircuitResult:
         """
         Returns the short-circuit current at the specified bus of the network.
 
@@ -558,7 +562,7 @@ class NetworkTopology:
 
         Returns
         -------
-        Quantity
+        ShortCircuitResult
             The maximum/minimum short-circuit current.
         """
         from python_electric.network.short_circuit_calc import ShortCircuitCalc
@@ -617,14 +621,19 @@ class NetworkTopology:
 
         # Empty the short-circuit dict each time run_short_circuit_calculation()
         # is called.
-        self._sc_dict = {}
+        self._sc_dict: dict[str, ShortCircuitResult] = {}
 
         # Calculate maximum/minimum short-circuit currents at the busses.
         for bus_id in self._nw_graph.busses:
             if bus_id != NetworkGraph.GROUND_ID:
-                I_sc_max = self.get_shortcircuit_current(bus_id, self.ShortCircuitCase.MAX)
-                I_sc_min = self.get_shortcircuit_current(bus_id, self.ShortCircuitCase.MIN)
-                self._sc_dict[bus_id] = self.ShortCircuitResult(I_sc_max, I_sc_min)
+                sc_res1 = self.get_shortcircuit_current(bus_id, self.ShortCircuitCase.MAX)
+                sc_res2 = self.get_shortcircuit_current(bus_id, self.ShortCircuitCase.MIN)
+                self._sc_dict[bus_id] = ShortCircuitResult(
+                    max=sc_res1.max,
+                    min=sc_res2.min,
+                    fault_type_max=sc_res1.fault_type_max,
+                    fault_type_min=sc_res2.fault_type_min
+                )
 
         # Assign the maximum/minimum short-circuit currents to cables/busbars.
         if self._sc_dict:
@@ -784,7 +793,7 @@ class NetworkTopology:
 
         # Get minimum short-circuit current
         cable, conn = self.get_cable(cable_id)
-        I_sc_min = self.get_shortcircuit_current(conn.end.name, self.ShortCircuitCase.MIN)
+        sc_res = self.get_shortcircuit_current(conn.end.name, self.ShortCircuitCase.MIN)
 
         pe_conductor = PEConductor(
             conductor_material=pe_conductor_cfg.cond_mat,
@@ -792,7 +801,7 @@ class NetworkTopology:
             separated=pe_conductor_cfg.separated
         )
         S_pe = pe_conductor.cross_section_area(
-            If=I_sc_min,
+            If=sc_res.min,
             t_interrupt=pe_conductor_cfg.t_interrupt,
             mech_protected=pe_conductor_cfg.mech_protected
         )

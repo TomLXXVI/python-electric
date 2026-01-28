@@ -123,27 +123,27 @@ class BusBar(Component):
         return None
 
     @property
-    def I_b_tot(self) -> Quantity:
+    def I_b_ph(self) -> Quantity:
         return self.I_b
 
-    @I_b_tot.setter
-    def I_b_tot(self, v: Quantity) -> None:
+    @I_b_ph.setter
+    def I_b_ph(self, v: Quantity) -> None:
         self.I_b = v
 
     @property
-    def I_n_tot(self) -> Quantity:
+    def I_n_ph(self) -> Quantity:
         return self.I_n
 
-    @I_n_tot.setter
-    def I_n_tot(self, v: Quantity) -> None:
+    @I_n_ph.setter
+    def I_n_ph(self, v: Quantity) -> None:
         self.I_n = v
 
     @property
-    def I_z_tot(self) -> Quantity:
+    def I_z_ph(self) -> Quantity:
         return self.I_z
 
-    @I_z_tot.setter
-    def I_z_tot(self, v: Quantity) -> None:
+    @I_z_ph.setter
+    def I_z_ph(self, v: Quantity) -> None:
         self.I_z = v
 
 

@@ -1,4 +1,5 @@
 from typing import List, Optional, Union
+import warnings
 from abc import ABC, abstractmethod
 import math
 import cmath
@@ -15,11 +16,27 @@ __all__ = [
     "transform_to_abc",
     "add_phase_shift",
     "add_deltastar_transformer_shift",
+    "UnSymmetricalFault",
     "LineToGroundFault",
     "LineToLineFault",
-    "DoubleLineToGroundFault"
+    "DoubleLineToGroundFault",
+    "AbsentNodeError",
+    "AbsentNodeWarning"
 ]
 
+# ------------------------------------------------------------------------------
+# Specific exceptions and warnings
+
+class AbsentNodeError(Exception):
+    pass
+
+
+class AbsentNodeWarning(Warning):
+    pass
+
+
+# ------------------------------------------------------------------------------
+# General stuff
 
 a = cmath.rect(1.0, math.radians(120.0))
 
@@ -115,6 +132,8 @@ def add_deltastar_transformer_shift(I_012: npt.ArrayLike) -> npt.NDArray:
     I_012 = np.array([I_012[0], I_1, I_2])
     return I_012
 
+# ------------------------------------------------------------------------------
+# Unsymmetrical fault classes
 
 class UnSymmetricalFault(ABC):
 
@@ -172,8 +191,22 @@ class UnSymmetricalFault(ABC):
         self._faulted_node_ID = node_ID
 
         self._faulted_node_index0 = self._nw0.get_node_index(node_ID)
+        if self._faulted_node_index0 is None:
+            if not isinstance(self, LineToLineFault):
+                raise AbsentNodeError(f"Node '{node_ID}' not present in Z0.")
+            else:
+                warnings.warn(
+                    f"Node '{node_ID}' not present in Z0.",
+                    category=AbsentNodeWarning
+                )
+
         self._faulted_node_index1 = self._nw1.get_node_index(node_ID)
+        if self._faulted_node_index1 is None:
+            raise AbsentNodeError(f"Node '{node_ID}' not present in Z1.")
+
         self._faulted_node_index2 = self._nw2.get_node_index(node_ID)
+        if self._faulted_node_index2 is None:
+            raise AbsentNodeError(f"Node '{node_ID}' not present in Z2.")
 
         self._Zf = Z_fault
 
@@ -198,13 +231,13 @@ class UnSymmetricalFault(ABC):
         """
         Returns the sequence voltage components of the given network node.
         """
-        k0 = self._faulted_node_index0
+        k0 = self._faulted_node_index0  # can be None if LineToLineFault
         k1 = self._faulted_node_index1
         k2 = self._faulted_node_index2
         node = self._nw1.get_node(ID)
         i = node.index
         
-        Z_ik0 = self._nw0.get_matrix_element(i, k0)
+        Z_ik0 = self._nw0.get_matrix_element(i, k0) if k0 is not None else 0.0
         Z_ik1 = self._nw1.get_matrix_element(i, k1)
         Z_ik2 = self._nw2.get_matrix_element(i, k2)
         
@@ -233,7 +266,6 @@ class UnSymmetricalFault(ABC):
         Returns the sequence components of the current in the specified branch.
         """
         branch_1 = self._nw1.get_branch(ID)
-        i = branch_1.start_node.index
         branch_2 = self._nw2.get_branch((branch_1.start_node.ID, branch_1.end_node.ID))
 
         Z_b1 = branch_1.impedance
@@ -241,11 +273,18 @@ class UnSymmetricalFault(ABC):
         Y_b1 = 1 / Z_b1
         Y_b2 = 1 / Z_b2
         
-        branch_0 = self._nw0.get_branch((branch_1.start_node.ID, branch_1.end_node.ID))
-        Z_b0 = branch_0.impedance
-        Y_b0 = 1 / Z_b0
+        try:
+            branch_0 = self._nw0.get_branch((branch_1.start_node.ID, branch_1.end_node.ID))
+        except KeyError:
+            # It may happen that the start and end node of branch_1 are absent
+            # in self._nw0 if they are on a disconnected island.
+            Y_b0 = 0.0
+        else:
+            Z_b0 = branch_0.impedance
+            Y_b0 = 0.0 if math.isinf(Z_b0) else 1 / Z_b0
 
         Y_b_012 = np.diagflat([Y_b0, Y_b1, Y_b2])
+        i = branch_1.start_node.index
         if i == REF_NODE_INDEX:
             if branch_1.has_source:
                 U_i_012 = np.array([[0.0, self._U_phase, 0.0]]).transpose()

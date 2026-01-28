@@ -187,8 +187,8 @@ class LineToExtraneousConductivePartFault:
         """
         Returns the maximum allowable earth-spreading resistance of the network
         so that should an insulation fault occur through an extraneous
-        conductive part, the conventional absolute limit-voltage cannot be
-        exceeded.
+        conductive part, the conventional absolute limit-voltage U_L would not
+        be exceeded.
 
         Returns
         -------
@@ -198,8 +198,8 @@ class LineToExtraneousConductivePartFault:
             voltage_type="AC",
             skin_condition=self.skin_condition
         )
-        U_l = safety_curve.conv_abs_limit_voltage.to('V').m
-        R_e_max = self.R_e_extr * U_l / (self.U_phase - U_l)
+        U_L = safety_curve.conv_abs_limit_voltage.to('V').m
+        R_e_max = self.R_e_extr * U_L / (self.U_phase - U_L)
         return Q_(R_e_max, 'ohm')
 
     @property
@@ -339,9 +339,11 @@ def check_earthing_resistance(
         t_c_max = min(fault.t_contact_max.to('ms'), t_c_max_iec.to('ms'))
     else:
         t_c_max = fault.t_contact_max
-    return IndirectContactProtectionResult(
+    res = IndirectContactProtectionResult(
         I_f=fault.I_fault,
         U_f=fault.U_fault,
         R_e_max=fault.R_e_max,
-        t_contact_max=t_c_max
+        t_contact_max=t_c_max,
     )
+    res.passed = True
+    return res

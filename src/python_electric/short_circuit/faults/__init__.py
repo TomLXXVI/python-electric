@@ -5,9 +5,12 @@ from .unsymmetrical_faults import *
 
 __all__ = [
     "ThreePhaseFault",
+    "UnSymmetricalFault",
     "LineToGroundFault",
     "DoubleLineToGroundFault",
     "LineToLineFault",
     "OneOpenConductorFault",
-    "TwoOpenConductorFault"
+    "TwoOpenConductorFault",
+    "AbsentNodeError",
+    "AbsentNodeWarning"
 ]
