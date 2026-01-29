@@ -1,67 +1,119 @@
 # python-electric
 
-**python-electric** is a lightweight Python package designed to support the 
-conceptual design and verification of low-voltage (LV) electrical networks in
-buildings. The library implements fundamental protection principles inspired by
-and aligned with IEC standards, enabling engineers to perform:
+**python-electric** is a lightweight Python package designed to support the
+**conceptual design and verification of low-voltage (LV) electrical networks**
+in buildings.
+
+The library implements fundamental electrical protection principles inspired
+by and aligned with IEC standards. It is intended for engineers who want to
+**explore, document, and validate design choices early in the design process**,
+before moving to manufacturer-specific tools or certified calculation software.
+
+Typical applications include:
 
 * Cable sizing
 * Overload protection verification
 * Short-circuit protection verification (maximum and minimum fault currents)
 * Basic current-based selectivity analysis
 * Time-based selectivity estimation for industrial circuit breakers
-* Earthing system verification including protection against electric shock due 
+* Earthing system verification, including protection against electric shock due
   to indirect contact
 
-python-electric focuses on **conceptual design and verification** of LV
-installations. It is intended for engineers who want to explore, document,
-and validate design choices early in the design process, before moving to
-manufacturer-specific tools or certified calculation software.
+python-electric focuses on **clarity, traceability, and conservative modelling**
+rather than black-box accuracy.
 
-An example Jupyter notebook is provided (`/examples/example_01/ex01_LV_design.ipynb`) 
-demonstrating the workflow and the steps that are taken in the design of a 
-low-voltage electrical network. This notebook reproduces a worked example from 
-the reference book *Laagspanningsinstallaties: technologie en ontwerp*.
 
-The design philosophy of python-electric is to remain transparent, conservative,
-and standard-oriented, favoring clarity and traceability over black-box accuracy.
+## Design Philosophy
+
+The design philosophy of python-electric is to remain:
+
+* **Transparent** – calculations follow explicit and inspectable models  
+* **Conservative** – results are suitable for protection verification  
+* **Standard-oriented** – aligned with commonly used IEC principles  
+
+The package deliberately avoids manufacturer-specific behaviour and proprietary
+curves, making it well suited for education, feasibility studies, and early-stage
+engineering design.
+
+
+## Workflow and Usage
+
+The typical workflow when using python-electric is:
+
+1. Define the electrical components (sources, transformers, cables, protection devices)
+2. Assemble the network topology (buses and connections)
+3. Perform verification checks (short-circuit currents, protection limits, earthing)
+4. Inspect results and iterate on design choices
+
+An example Jupyter notebook is provided in: `/examples/example_01/LV_design_01.ipynb`.
+
+This notebook demonstrates a complete design workflow and reproduces a worked
+example from the reference book *Laagspanningsinstallaties: technologie en ontwerp*.
+
+Jupyter notebooks are the recommended environment for interactive use, allowing
+design decisions and verification steps to remain fully transparent and
+well-documented.
+
+
+## Graphical Network Builder (GUI)
+
+In addition to the core library, this repository includes an **optional GUI
+package** that assists in **building the network topology** and **adding
+electrical components** in an interactive and visual way.
+
+The GUI serves as a **convenience layer** on top of the python-electric API and
+allows users to:
+
+* Define buses (nodes) and network connections  
+* Add and configure components such as cables, transformers, ...  
+* Assemble a complete low-voltage network topology step by step  
+* Export the resulting network definition for use in Python scripts or
+  Jupyter notebooks  
+
+The GUI does **not replace** the underlying calculation engine. All calculations,
+verifications, and design logic are performed by the core python-electric library.
+The GUI merely facilitates **network construction and inspection**.
+
+Use of the GUI is **entirely optional**. Advanced users may prefer to define
+networks directly in code for full control, automation, or batch processing.
 
 
 ## Limitations
 
 * The model intentionally avoids the use of manufacturer-specific curves.
 * Selectivity is computed only in a **normative, conservative** sense.
-* Arc-energy reduction, breaker coordination classes, and cascading effects 
+* Arc-energy reduction, breaker coordination classes, and cascading effects
   (back-up protection) are outside scope.
 * The package currently supports **TN earthing systems** and **IT earthing systems**.
 
 
 ## License
 
-This project is licensed under the MIT License. See the LICENSE file for 
-details.
+This project is licensed under the MIT License.  
+See the LICENSE file for details.
 
 
 ## Disclaimer
 
 This software is provided for engineering support only.
 
-python-electric is an engineering-oriented Python library intended to support
-electrical calculations such as short-circuit analysis, cable sizing,
-protection studies, and related topics.
+python-electric is an engineering-oriented Python library intended to assist with
+electrical calculations such as short-circuit analysis, cable sizing, protection
+studies, and related topics.
 
 The results produced by this software are based on mathematical models,
 assumptions, and reference standards commonly used in electrical engineering.
 They are provided for **informational and educational purposes only**.
 
-python-electric is **not a certified calculation tool** and does **not**
-replace normative calculations, manufacturer documentation, or professional
-engineering judgement.
+python-electric is **not a certified calculation tool** and does **not** replace
+normative calculations, manufacturer documentation, or professional engineering
+judgement.
 
-All results must be independently verified by a qualified engineer and
-checked against the applicable standards, regulations, and project-specific
-requirements before being used for design, execution, or safety-related
-decisions.
+All results must be independently verified by a qualified engineer and checked
+against applicable standards, regulations, and project-specific requirements
+before being used for design, execution, or safety-related decisions.
 
 The author assumes no responsibility for the use or misuse of the results
 generated by this software.
+
+
