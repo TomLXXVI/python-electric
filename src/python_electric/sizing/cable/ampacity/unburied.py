@@ -5,9 +5,26 @@ References
 ----------
 Electrical Installation Guide 2007, Merlin Gerin, Chapter G, Fig. G21a.
 """
-from ....materials import ConductorProperties, InsulationProperties
-from ....utils.lookup_table import LookupTable
-from .exceptions import CurrentExceedanceError
+from ....materials import (
+    ConductorProperties,
+    InsulationProperties
+)
+from ....utils.lookup_table import (
+    LookupTable,
+    DataLowerBoundError,
+    DataUpperBoundError,
+    DataNotFoundError,
+    RowheaderNotFoundError,
+    ColumnheaderNotFoundError
+)
+from .exceptions import (
+    CurrentUnderflowError,
+    CurrentOverflowError,
+    CSANotFoundError,
+    AmpacityError
+)
+
+__all__ = ["get_cross_sectional_area", "get_ampacity"]
 
 
 def _create_index_table():
@@ -106,6 +123,7 @@ index_table = _create_index_table()
 copper_table = _create_copper_table()
 alu_table = _create_aluminium_table()
 
+
 def get_cross_sectional_area(
     conductor_props: ConductorProperties,
     insulation_props: InsulationProperties,
@@ -123,11 +141,12 @@ def get_cross_sectional_area(
                         csa = copper_table.rowheader_value(col_index, current)
                     else:
                         csa = alu_table.rowheader_value(col_index, current)
-                except ValueError:
-                    raise CurrentExceedanceError(
-                        f"Required minimal conductor cross-sectional area "
-                        f"cannot be determined for current {current:.0f} A."
-                    ) from None
+                except DataLowerBoundError:
+                    raise CurrentUnderflowError
+                except DataUpperBoundError:
+                    raise CurrentOverflowError
+                except DataNotFoundError:
+                    raise CSANotFoundError
                 return csa
             else:
                 raise ValueError(
@@ -156,8 +175,8 @@ def get_ampacity(
                         amp = copper_table.data_value(cross_sectional_area, col_index)
                     else:
                         amp = alu_table.data_value(cross_sectional_area, col_index)
-                except ValueError:
-                    raise ValueError(
+                except (RowheaderNotFoundError, ColumnheaderNotFoundError):
+                    raise AmpacityError(
                         f"Ampacity cannot be determined for conductor "
                         f"with CSA {cross_sectional_area:.0f} mm²."
                     ) from None

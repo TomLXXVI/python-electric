@@ -239,16 +239,25 @@ class Cable(Component):
         self.I_bc_ph = self.k_simul * self.k_ext * self.I_b_ph
         self.U_ph = self._get_phase_voltage()
 
-        i_max = 5
+        i_max = 8
         for i in range(i_max):
             try:
                 self._configure_cable()
-            except CurrentExceedanceError as e:
-                if i < i_max:
+            except CurrentOverflowError:
+                if i < i_max - 1:
                     self.n_phase += 1
                     continue
                 else:
-                    raise e
+                    raise ValueError(
+                        f"A suitable conductor cross-section could not be "
+                        f"determined for load current {self.I_b_ph.to('A'):~P.3f} "
+                        f"(n_phase = {self.n_phase})."
+                    )
+            except (CurrentUnderflowError, CSANotFoundError):
+                raise ValueError(
+                    f"A suitable conductor cross-section could not be "
+                    f"determined for load current {self.I_b_ph.to('A'):~P.3f}."
+                )
 
         self.Z_dict = self._calc_impedance_dict()
         self.dU, self.dU_rel = self.get_voltage_drop(self.U_l, self.I_b_ph, self.cos_phi)

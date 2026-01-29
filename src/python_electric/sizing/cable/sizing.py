@@ -22,7 +22,6 @@ from ...materials import (
 )
 from .ampacity import unburied
 from .ampacity import buried
-from .ampacity.exceptions import CurrentExceedanceError
 
 __all__ = [
     "Ambient",
@@ -34,7 +33,6 @@ __all__ = [
     "get_size",
     "set_size",
     "get_nominal_current",
-    "CurrentExceedanceError"
 ]
 
 

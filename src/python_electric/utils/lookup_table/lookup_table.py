@@ -1,9 +1,9 @@
 from typing import Any
 from dataclasses import dataclass, field
 
-__all__ = [
-    "LookupTable"
-]
+from .exceptions import *
+
+__all__ = ["LookupTable"]
 
 
 @dataclass(frozen=True)
@@ -112,12 +112,21 @@ class LookupTable:
             row_header = list(self.row_header.keys())
         else:
             row_header = self.row_header
+
+        if rowheader_val not in row_header:
+            raise RowheaderNotFoundError
+
         if isinstance(self.col_header, dict):
             col_header = list(self.col_header.keys())
         else:
             col_header = self.col_header
+
+        if colheader_val not in col_header:
+            raise ColumnheaderNotFoundError
+
         i = row_header.index(rowheader_val)
         j = col_header.index(colheader_val)
+
         value = self.data[i][j]
         return value
 
@@ -150,6 +159,15 @@ class LookupTable:
             col_header = self.col_header
         j = col_header.index(colheader_val)
         data_vals = [self.data[i][j] for i in range(len(self.data))]
+
+        lower_bound = min(data_vals)
+        if data_val < lower_bound:
+            raise DataLowerBoundError
+
+        upper_bound = max(data_vals)
+        if data_val > upper_bound:
+            raise DataUpperBoundError
+
         for i in range(len(data_vals)):
             if i < len(data_vals) - 1:
                 if data_vals[i] < data_val <= data_vals[i + 1]:
@@ -158,10 +176,8 @@ class LookupTable:
                         return row_header[i + 1]
                     else:
                         return self.row_header[i + 1]
-        else:
-            raise ValueError(
-                "The given data value falls outside the data table"
-            )
+
+        raise DataNotFoundError
 
     def colheader_value(self, rowheader_val: Any, data_val: float) -> Any:
         """
@@ -192,6 +208,15 @@ class LookupTable:
             row_header = self.row_header
         i = row_header.index(rowheader_val)
         data_vals = self.data[i]
+
+        lower_bound = min(data_vals)
+        if data_val < lower_bound:
+            raise DataLowerBoundError
+
+        upper_bound = max(data_vals)
+        if data_val > upper_bound:
+            raise DataUpperBoundError
+
         for j in range(len(data_vals)):
             if j < len(data_vals) - 1:
                 if data_vals[j] < data_val <= data_vals[j + 1]:
@@ -200,7 +225,5 @@ class LookupTable:
                         return col_header[j + 1]
                     else:
                         return self.col_header[j + 1]
-        else:
-            raise ValueError(
-                "The given data value falls outside the data table"
-            )
+
+        raise DataNotFoundError
