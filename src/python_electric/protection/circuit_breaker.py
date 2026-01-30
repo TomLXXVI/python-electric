@@ -184,21 +184,21 @@ class CircuitBreaker:
                 if self.standard == CircuitBreaker.Standard.RESIDENTIAL:
                     return 3.0 * self.I_r
                 else:
-                    return 4.0 * self.I_r * (1.0 - 0.2)
+                    return 4.0 * self.I_r * 0.8
             case CircuitBreaker.Category.C:
                 if self.standard == CircuitBreaker.Standard.RESIDENTIAL:
                     return 5.0 * self.I_r
                 else:
-                    return 8.0 * self.I_r * (1.0 - 0.2)
+                    return 8.0 * self.I_r * 0.8
             case CircuitBreaker.Category.D:
                 if self.standard == CircuitBreaker.Standard.RESIDENTIAL:
                     return 10 * self.I_r
                 else:
-                    return 12 * self.I_r * (1.0 - 0.2)
+                    return 12 * self.I_r * 0.8
             case CircuitBreaker.Category.ADJUSTABLE:
                 if self.standard == CircuitBreaker.Standard.INDUSTRIAL:
                     if self.k_m is not None:
-                        return self.k_m * self.I_r * (1.0 - 0.2)
+                        return self.k_m * self.I_r * 0.8
                     else:
                         raise AttributeError(
                             "Parameter `k_m` cannot be None."
@@ -214,21 +214,21 @@ class CircuitBreaker:
                 if self.standard == CircuitBreaker.Standard.RESIDENTIAL:
                     return 5.0 * self.I_r
                 else:
-                    return 4.0 * self.I_r * (1.0 + 0.2)
+                    return 4.0 * self.I_r * 1.2
             case CircuitBreaker.Category.C:
                 if self.standard == CircuitBreaker.Standard.RESIDENTIAL:
                     return 10.0 * self.I_r
                 else:
-                    return 8.0 * self.I_r * (1.0 + 0.2)
+                    return 8.0 * self.I_r * 1.2
             case CircuitBreaker.Category.D:
                 if self.standard == CircuitBreaker.Standard.RESIDENTIAL:
                     return 20.0 * self.I_r
                 else:
-                    return 12.0 * self.I_r * (1.0 + 0.2)
+                    return 12.0 * self.I_r * 1.2
             case CircuitBreaker.Category.ADJUSTABLE:
                 if self.standard == CircuitBreaker.Standard.INDUSTRIAL:
                     if self.k_m is not None:
-                        return self.k_m * self.I_r * (1.0 + 0.2)
+                        return self.k_m * self.I_r * 1.2
                     else:
                         raise AttributeError(
                             "Parameter `k_m` cannot be None."
@@ -274,15 +274,19 @@ class CircuitBreaker:
         I_z = self.I_z
         I_nf = self.I_nf
         I_f = self.I_f
+
+        # check 1
         if I_b <= I_n <= I_z:
             pass
         else:
             warnings.warn(
-                f"I_n {I_n.to('A'):~P.1f} is not in the range "
+                f"I_n {I_n.to('A'):~P.1f} is not in the interval "
                 f"[{I_b.to('A'):~P.1f}, {I_z.to('A'):~P.1f}].",
                 category=ProtectionWarning
             )
             return False
+
+        # check 2
         if I_nf <= 1.15 * I_z:
             pass
         else:
@@ -291,6 +295,8 @@ class CircuitBreaker:
                 category=ProtectionWarning
             )
             return False
+
+        # check 3
         if I_f <= 1.45 * I_z:
             pass
         else:

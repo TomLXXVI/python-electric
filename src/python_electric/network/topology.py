@@ -220,8 +220,8 @@ class TransformerInput(ComponentInput):
     U_ls: Quantity
     u_cc: Quantity
     P_Cu: Quantity
-    pri_conn: WindingConn | None = None
-    sec_conn: WindingConn | None = None
+    pri_conn: WindingConn = WindingConn.D
+    sec_conn: WindingConn = WindingConn.YN
     Zn_pri: Quantity = Q_(0, 'ohm')
     Zn_sec: Quantity = Q_(0, 'ohm')
     z0_r_factor: float = 1.0

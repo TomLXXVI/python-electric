@@ -33,8 +33,16 @@ __all__ = [
     "get_size",
     "set_size",
     "get_nominal_current",
+    "NominalCurrentError"
 ]
 
+# ------------------------------------------------------------------------------
+# Specific exceptions
+
+class NominalCurrentError(Exception):
+    pass
+
+# ------------------------------------------------------------------------------
 
 def _create_unburied_group_correction_table() -> LookupTable:
     """
@@ -379,10 +387,9 @@ class CableData:
             self.ambient = Ambient.GROUND
 
     def update(self, k, I_z0, S, I_n) -> None:
-        I_z = k * I_z0  # current-carrying capacity at actual conditions
         self.k_z = k
         self.S = S
-        self.I_z = I_z
+        self.I_z = k * I_z0  # current-carrying capacity at actual conditions
         self.I_z0 = I_z0
         self.I_n = I_n
         self.I2t = _joule_integral(self.con_props.type, self.ins_props.type, S)
@@ -484,6 +491,11 @@ def get_size(
     else:
         raise ValueError(f"Unknown installation method.")
 
+    # Check I_b <= I_n <= I_z
+    I_z = k * I_z0
+    if not (I_b <= I_n <= I_z):
+        raise NominalCurrentError
+
     # Update cable_data with the results.
     cable_data.update(k, I_z0, S, I_n)
     return cable_data
@@ -556,6 +568,11 @@ def set_size(cable_data: CableData, S: float) -> CableData:
         )
     else:
         raise ValueError(f"Unknown installation method.")
+
+    # Check I_b <= I_n <= I_z
+    I_z = k * I_z0
+    if not (I_b <= I_n <= I_z):
+        raise NominalCurrentError
 
     # Update cable_data with the results.
     cable_data.update(k, I_z0, S, I_n)

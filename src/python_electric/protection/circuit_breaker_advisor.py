@@ -324,7 +324,7 @@ class CircuitBreakerAdvisor:
                 I_b=self.cable.I_b_ph,
                 I_n=self.cable.I_n_ph,
                 I_z=self.cable.I_z_ph,
-                I2t=getattr(self.cable, "I2t_tot", None),
+                I2t=getattr(self.cable, "I2t_ph", None),
                 I_cu=I_cu,
                 E_t=None,
                 k_m=k_m,

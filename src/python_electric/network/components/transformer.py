@@ -92,8 +92,8 @@ class Transformer(Component):
     I_b: Quantity
     cos_phi: float
 
-    pri_conn: WindingConn | None = None
-    sec_conn: WindingConn | None = None
+    pri_conn: WindingConn = WindingConn.D
+    sec_conn: WindingConn = WindingConn.YN
     Zn_pri: Quantity = Q_(0, 'ohm')
     Zn_sec: Quantity = Q_(0, 'ohm')
 

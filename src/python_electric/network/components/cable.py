@@ -243,6 +243,9 @@ class Cable(Component):
         for i in range(i_max):
             try:
                 self._configure_cable()
+            except NominalCurrentError:
+                self.sizing_based_on_I_nom = True
+                continue
             except CurrentOverflowError:
                 if i < i_max - 1:
                     self.n_phase += 1
@@ -274,7 +277,7 @@ class Cable(Component):
             # If conductor csa is not specified: calculate required minimal csa
             self.__size_cable(cd)
         else:
-            # User has specified the csa of cable conductors: check if ok.
+            # User has specified the csa of cable conductors: check if OK.
             S_user = deepcopy(self.S)
             self.__size_cable(cd)
             if self.S.to('mm ** 2') > S_user.to('mm ** 2'):

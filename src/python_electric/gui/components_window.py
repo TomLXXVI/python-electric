@@ -60,7 +60,7 @@ class ComponentsWindow(tk.Toplevel):
     def __init__(self, master: tk.Misc, project: ProjectModel):
         super().__init__(master)
         self.title("python-electric – Components Builder (MVP)")
-        self.geometry("980x560")
+        self.geometry("980x660")
         self.project = project
 
         self.selected_conn_id: str | None = None
@@ -113,9 +113,9 @@ class ComponentsWindow(tk.Toplevel):
         self.tab_transformer = ttk.Frame(self.nb, padding=10)
         self.tab_load = ttk.Frame(self.nb, padding=10)
 
+        self.nb.add(self.tab_load, text="Load")
         self.nb.add(self.tab_cable, text="Cable")
         self.nb.add(self.tab_transformer, text="Transformer")
-        self.nb.add(self.tab_load, text="Load")
 
         self._build_cable_tab(self.tab_cable)
         self._build_transformer_tab(self.tab_transformer)
@@ -211,40 +211,145 @@ class ComponentsWindow(tk.Toplevel):
 
     # -------- forms: Cable --------
     def _build_cable_tab(self, tab: ttk.Frame) -> None:
-        # minimal but useful set of fields
-        self.cab_name = LabeledEntry(tab, text="name", label_width_px=170)
+        self.cab_name = LabeledEntry(
+            tab,
+            text="name",
+            label_width_px=170
+        )
         self.cab_name.grid(row=0, column=0, sticky="we", pady=4)
-
-        self.cab_L = QuantityInputField(tab, label="L", units=["m", "km"], default_unit="m", Q_=Q_, label_width_px=170)
+        self.cab_L = QuantityInputField(
+            tab,
+            label="length",
+            units=["m", "km"],
+            default_unit="m",
+            Q_=Q_,
+            label_width_px=170
+        )
         self.cab_L.grid(row=1, column=0, sticky="we", pady=4)
-
-        self.cab_mat = LabeledCombobox(tab, text="conductor", values=[m.value for m in ConductorMaterial], label_width_px=170)
+        self.cab_mat = LabeledCombobox(
+            tab,
+            text="conductor",
+            values=[m.value for m in ConductorMaterial],
+            label_width_px=170
+        )
         self.cab_mat.grid(row=2, column=0, sticky="we", pady=4)
-
-        self.cab_ins = LabeledCombobox(tab, text="insulation", values=[m.value for m in InsulationMaterial], label_width_px=170)
+        self.cab_ins = LabeledCombobox(
+            tab,
+            text="insulation",
+            values=[m.value for m in InsulationMaterial],
+            label_width_px=170
+        )
         self.cab_ins.grid(row=3, column=0, sticky="we", pady=4)
-
-        self.cab_im = LabeledCombobox(tab, text="install method", values=[m.value for m in InstallMethod], width=12, label_width_px=170)
+        self.cab_im = LabeledCombobox(
+            tab,
+            text="install method",
+            values=[m.value for m in InstallMethod],
+            width=12,
+            label_width_px=170
+        )
         self.cab_im.grid(row=4, column=0, sticky="we", pady=4)
-
-        self.cab_mount = LabeledCombobox(tab, text="mounting", values=list(CableMountingMapper.labels), label_width_px=170, width=24)
+        self.cab_mount = LabeledCombobox(
+            tab,
+            text="mounting",
+            values=list(CableMountingMapper.labels),
+            label_width_px=170,
+            width=24
+        )
         self.cab_mount.grid(row=5, column=0, sticky="we", pady=4)
-
-        self.cab_arr = LabeledCombobox(tab, text="arrangement", values=list(CableArrangementMapper.labels), width=14, label_width_px=170)
+        self.cab_arr = LabeledCombobox(
+            tab,
+            text="arrangement",
+            values=list(CableArrangementMapper.labels),
+            width=14,
+            label_width_px=170
+        )
         self.cab_arr.grid(row=6, column=0, sticky="we", pady=4)
-
-        self.cab_phase = LabeledCombobox(tab, text="phase system", values=list(PhaseSystemMapper.labels), width=10, label_width_px=170)
-        self.cab_phase.grid(row=7, column=0, sticky="we", pady=4)
-
-        self.cab_es = LabeledCombobox(tab, text="earthing", values=[""] + [e.value for e in EarthingSystem], width=8, label_width_px=170)
-        self.cab_es.grid(row=8, column=0, sticky="we", pady=4)
+        self.cab_nc = LabeledEntry(
+            tab,
+            text="# other circuits",
+            width=14,
+            label_width_px=170
+        )
+        self.cab_nc.grid(row=7, column=0, sticky="we", pady=4)
+        units_T = [f"{Q_(1, 'degC').u:~P}"]
+        self.cab_T = QuantityInputField(
+            tab,
+            label="ambient temperature",
+            units=units_T,
+            default_unit=units_T[0],
+            Q_=Q_,
+            label_width_px=170
+        )
+        self.cab_T.grid(row=8, column=0, sticky="we", pady=4)
+        self.cab_phase = LabeledCombobox(
+            tab,
+            text="phase system",
+            values=list(PhaseSystemMapper.labels),
+            width=10,
+            label_width_px=170
+        )
+        self.cab_phase.grid(row=9, column=0, sticky="we", pady=4)
+        self.cab_es = LabeledCombobox(
+            tab,
+            text="earthing system",
+            values=[""] + [e.value for e in EarthingSystem],
+            width=8,
+            label_width_px=170
+        )
+        self.cab_es.grid(row=10, column=0, sticky="we", pady=4)
+        self.cab_h3 = LabeledEntry(
+            tab,
+            text="3rd-order harmonics",
+            width=14,
+            label_width_px=170
+        )
+        self.cab_h3.grid(row=11, column=0, sticky="we", pady=4)
+        self.cab_ks = LabeledEntry(
+            tab,
+            text="simultaneity factor",
+            width=14,
+            label_width_px=170
+        )
+        self.cab_ks.grid(row=12, column=0, sticky="we", pady=4)
+        self.cab_ke = LabeledEntry(
+            tab,
+            text="expansion factor",
+            width=14,
+            label_width_px=170
+        )
+        self.cab_ke.grid(row=13, column=0, sticky="we", pady=4)
+        self.cab_Z0_r = LabeledEntry(
+            tab,
+            text="Z0-factor R",
+            width=14,
+            label_width_px=170
+        )
+        self.cab_Z0_r.grid(row=14, column=0, sticky="we", pady=4)
+        self.cab_Z0_x = LabeledEntry(
+            tab,
+            text="Z0-factor X",
+            width=14,
+            label_width_px=170
+        )
+        self.cab_Z0_x.grid(row=15, column=0, sticky="we", pady=4)
 
         btns = ttk.Frame(tab)
-        btns.grid(row=9, column=0, sticky="we", pady=(14, 0))
-
-        ttk.Button(btns, text="Apply to connection", command=self._apply_cable).pack(side="left")
-        ttk.Button(btns, text="Reset to defaults", command=self._reset_cable_to_defaults).pack(side="left", padx=6)
-        ttk.Button(btns, text="Save as defaults", command=self._save_cable_as_defaults).pack(side="left")
+        btns.grid(row=16, column=0, sticky="we", pady=(14, 0))
+        ttk.Button(
+            btns,
+            text="Apply to connection",
+            command=self._apply_cable
+        ).pack(side="left")
+        ttk.Button(
+            btns,
+            text="Reset to defaults",
+            command=self._reset_cable_to_defaults
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            btns,
+            text="Save as defaults",
+            command=self._save_cable_as_defaults
+        ).pack(side="left")
 
         tab.columnconfigure(0, weight=1)
 
@@ -282,8 +387,15 @@ class ComponentsWindow(tk.Toplevel):
         self.cab_im.set(cab.install_method.value)
         self.cab_mount.set(CableMountingMapper.get_label(cab.cable_mounting))
         self.cab_arr.set(CableArrangementMapper.get_label(cab.cable_arrangement))
+        self.cab_nc.set(cab.num_other_circuits)
+        self.cab_T.set_quantity(cab.T_amb)
         self.cab_phase.set(PhaseSystemMapper.get_label(cab.phase_system))
         self.cab_es.set("" if cab.earthing_system is None else cab.earthing_system.value)
+        self.cab_h3.set(cab.h3_fraction)
+        self.cab_ks.set(cab.k_simul)
+        self.cab_ke.set(cab.k_ext)
+        self.cab_Z0_r.set(cab.z0_r_factor)
+        self.cab_Z0_x.set(cab.z0_x_factor)
 
     def _read_cable_form(self) -> CableInput:
         d: CableInput = self.project.get_defaults(CableInput)
@@ -300,41 +412,143 @@ class ComponentsWindow(tk.Toplevel):
             install_method=InstallMethod(self.cab_im.get()),
             cable_mounting=CableMountingMapper.get_enum(self.cab_mount.get()),
             cable_arrangement=CableArrangementMapper.get_enum(self.cab_arr.get()),
+            num_other_circuits=int(self.cab_nc.get()),
+            T_amb=self.cab_T.get_quantity(),
             phase_system=PhaseSystemMapper.get_enum(self.cab_phase.get()),
             earthing_system=earthing,
+            h3_fraction=float(self.cab_h3.get()),
+            k_simul=float(self.cab_ks.get()),
+            k_ext=float(self.cab_ke.get()),
+            z0_r_factor=float(self.cab_Z0_r.get()),
+            z0_x_factor=float(self.cab_Z0_x.get())
         )
 
     # -------- forms: Transformer --------
     def _build_transformer_tab(self, tab: ttk.Frame) -> None:
-        self.tr_name = LabeledEntry(tab, text="name", label_width_px=170)
+        self.tr_name = LabeledEntry(
+            tab,
+            text="name",
+            label_width_px=170
+        )
         self.tr_name.grid(row=0, column=0, sticky="we", pady=4)
-
-        self.tr_Sn = QuantityInputField(tab, label="nominal power", units=["kVA", "MVA"], default_unit="kVA", Q_=Q_, label_width_px=170)
+        self.tr_Sn = QuantityInputField(
+            tab,
+            label="nominal power",
+            units=["kVA", "MVA"],
+            default_unit="kVA",
+            Q_=Q_,
+            label_width_px=170
+        )
         self.tr_Sn.grid(row=1, column=0, sticky="we", pady=4)
-
-        self.tr_Ulp = QuantityInputField(tab, label="primary voltage", units=["V", "kV"], default_unit="kV", Q_=Q_, label_width_px=170)
+        self.tr_Ulp = QuantityInputField(
+            tab,
+            label="primary voltage",
+            units=["V", "kV"],
+            default_unit="kV",
+            Q_=Q_,
+            label_width_px=170
+        )
         self.tr_Ulp.grid(row=2, column=0, sticky="we", pady=4)
-
-        self.tr_Uls = QuantityInputField(tab, label="secondary voltage", units=["V", "kV"], default_unit="V", Q_=Q_, label_width_px=170)
-        self.tr_Uls.grid(row=3, column=0, sticky="we", pady=4)
-
-        self.tr_ucc = QuantityInputField(tab, label="percent impedance voltage", units=["pct"], default_unit="pct", Q_=Q_, label_width_px=170)
+        self.tr_Uls = QuantityInputField(
+            tab,
+            label="secondary voltage",
+            units=["V", "kV"],
+            default_unit="V",
+            Q_=Q_,
+            label_width_px=170
+        )
+        self.tr_Uls.grid(
+            row=3,
+            column=0,
+            sticky="we",
+            pady=4
+        )
+        self.tr_ucc = QuantityInputField(
+            tab,
+            label="percent impedance voltage",
+            units=[f"{Q_(1, 'pct').u:~P}"],
+            default_unit=f"{Q_(1, 'pct').u:~P}",
+            Q_=Q_,
+            label_width_px=170
+        )
         self.tr_ucc.grid(row=4, column=0, sticky="we", pady=4)
-
-        self.tr_Pcu = QuantityInputField(tab, label="copper loss", units=["W", "kW"], default_unit="kW", Q_=Q_, label_width_px=170)
+        self.tr_Pcu = QuantityInputField(
+            tab,
+            label="copper loss",
+            units=["W", "kW"],
+            default_unit="kW",
+            Q_=Q_,
+            label_width_px=170
+        )
         self.tr_Pcu.grid(row=5, column=0, sticky="we", pady=4)
-
         wvals = [w.value for w in Transformer.WindingConn]
-        self.tr_pri = LabeledCombobox(tab, text="primary connection", values=wvals, width=10, label_width_px=170)
-        self.tr_sec = LabeledCombobox(tab, text="secondary connection", values=wvals, width=10, label_width_px=170)
+        self.tr_pri = LabeledCombobox(
+            tab,
+            text="primary connection",
+            values=wvals,
+            width=10,
+            label_width_px=170
+        )
         self.tr_pri.grid(row=6, column=0, sticky="we", pady=4)
+        self.tr_sec = LabeledCombobox(
+            tab,
+            text="secondary connection",
+            values=wvals,
+            width=10,
+            label_width_px=170
+        )
         self.tr_sec.grid(row=7, column=0, sticky="we", pady=4)
+        units_R = [f"{Q_(1, 'ohm').u:~P}", f"{Q_(1, 'mohm').u:~P}", f"{Q_(1, 'kohm').u:~P}"]
+        self.tr_Znp = QuantityInputField(
+            tab,
+            label="Zn primary",
+            units=units_R,
+            default_unit=units_R[0],
+            Q_=Q_,
+            label_width_px=170
+        )
+        self.tr_Znp.grid(row=8, column=0, sticky="we", pady=4)
+        self.tr_Zns = QuantityInputField(
+            tab,
+            label="Zn secondary",
+            units=units_R,
+            default_unit=units_R[0],
+            Q_=Q_,
+            label_width_px=170
+        )
+        self.tr_Zns.grid(row=9, column=0, sticky="we", pady=4)
+        self.tr_Z0_r = LabeledEntry(
+            tab,
+            text="Z0-factor R",
+            width=14,
+            label_width_px=170
+        )
+        self.tr_Z0_r.grid(row=10, column=0, sticky="we", pady=4)
+        self.tr_Z0_x = LabeledEntry(
+            tab,
+            text="Z0-factor X",
+            width=14,
+            label_width_px=170
+        )
+        self.tr_Z0_x.grid(row=11, column=0, sticky="we", pady=4)
 
         btns = ttk.Frame(tab)
-        btns.grid(row=8, column=0, sticky="we", pady=(14, 0))
-        ttk.Button(btns, text="Apply to connection", command=self._apply_transformer).pack(side="left")
-        ttk.Button(btns, text="Reset to defaults", command=self._reset_transformer_to_defaults).pack(side="left", padx=6)
-        ttk.Button(btns, text="Save as defaults", command=self._save_transformer_as_defaults).pack(side="left")
+        btns.grid(row=12, column=0, sticky="we", pady=(14, 0))
+        ttk.Button(
+            btns,
+            text="Apply to connection",
+            command=self._apply_transformer
+        ).pack(side="left")
+        ttk.Button(
+            btns,
+            text="Reset to defaults",
+            command=self._reset_transformer_to_defaults
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            btns,
+            text="Save as defaults",
+            command=self._save_transformer_as_defaults
+        ).pack(side="left")
 
         tab.columnconfigure(0, weight=1)
 
@@ -373,6 +587,10 @@ class ComponentsWindow(tk.Toplevel):
         self.tr_Pcu.set_quantity(tr.P_Cu)
         self.tr_pri.set("" if tr.pri_conn is None else tr.pri_conn.value)
         self.tr_sec.set("" if tr.sec_conn is None else tr.sec_conn.value)
+        self.tr_Znp.set_quantity(tr.Zn_pri)
+        self.tr_Zns.set_quantity(tr.Zn_sec)
+        self.tr_Z0_r.set(tr.z0_r_factor)
+        self.tr_Z0_x.set(tr.z0_x_factor)
 
     def _read_transformer_form(self) -> TransformerInput:
         d: TransformerInput = self.project.get_defaults(TransformerInput)
@@ -391,24 +609,79 @@ class ComponentsWindow(tk.Toplevel):
             P_Cu=self.tr_Pcu.get_quantity(),
             pri_conn=pri,
             sec_conn=sec,
+            Zn_pri=self.tr_Znp.get_quantity(),
+            Zn_sec=self.tr_Zns.get_quantity(),
+            z0_r_factor=float(self.tr_Z0_r.get()),
+            z0_x_factor=float(self.tr_Z0_x.get())
         )
 
     # -------- forms: Load --------
     def _build_load_tab(self, tab: ttk.Frame) -> None:
-        self.ld_Pe = QuantityInputField(tab, label="electrical power", units=["W", "kW"], default_unit="kW", Q_=Q_, label_width_px=170)
-        self.ld_Pe.grid(row=0, column=0, sticky="we", pady=4)
-
-        self.ld_cos = LabeledEntry(tab, text="cos phi", label_width_px=170)
+        self.ld_Ul = QuantityInputField(
+            tab,
+            label="line-to-line voltage (opt.)",
+            units=["V", "kV"],
+            default_unit="V",
+            Q_=Q_,
+            label_width_px=170
+        )
+        self.ld_Ul.grid(row=0, column=0, sticky="we", pady=4)
+        self.ld_cos = LabeledEntry(
+            tab,
+            text="cos phi",
+            label_width_px=170
+        )
         self.ld_cos.set("0.8")
         self.ld_cos.grid(row=1, column=0, sticky="we", pady=4)
-
-        self.ld_Ul = QuantityInputField(tab, label="line-to-line voltage (opt.)", units=["V", "kV"], default_unit="V", Q_=Q_, label_width_px=170)
-        self.ld_Ul.grid(row=2, column=0, sticky="we", pady=4)
+        self.ld_Pe = QuantityInputField(
+            tab,
+            label="electrical power",
+            units=["W", "kW"],
+            default_unit="kW",
+            Q_=Q_,
+            label_width_px=170
+        )
+        self.ld_Pe.grid(row=2, column=0, sticky="we", pady=4)
+        self.ld_Pm = QuantityInputField(
+            tab,
+            label="mechanical power",
+            units=["W", "kW"],
+            default_unit="kW",
+            Q_=Q_,
+            label_width_px=170
+        )
+        self.ld_Pm.grid(row=3, column=0, sticky="we", pady=4)
+        self.ld_eta = QuantityInputField(
+            tab,
+            label="efficiency",
+            units=[f"{Q_(1, 'pct').u:~P}"],
+            default_unit=f"{Q_(1, 'pct').u:~P}",
+            Q_=Q_,
+            label_width_px=170
+        )
+        self.ld_eta.set_quantity(Q_(100, 'pct'))
+        self.ld_eta.grid(row=4, column=0, sticky="we", pady=4)
+        self.ld_ku = LabeledEntry(
+            tab,
+            text="utilization factor",
+            width=14,
+            label_width_px=170
+        )
+        self.ld_ku.set("1.0")
+        self.ld_ku.grid(row=5, column=0, sticky="we", pady=4)
 
         btns = ttk.Frame(tab)
-        btns.grid(row=3, column=0, sticky="we", pady=(14, 0))
-        ttk.Button(btns, text="Apply to connection", command=self._apply_load).pack(side="left")
-        ttk.Button(btns, text="Clear load", command=self._clear_load).pack(side="left", padx=6)
+        btns.grid(row=6, column=0, sticky="we", pady=(14, 0))
+        ttk.Button(
+            btns,
+            text="Apply to connection",
+            command=self._apply_load
+        ).pack(side="left")
+        ttk.Button(
+            btns,
+            text="Clear load",
+            command=self._clear_load
+        ).pack(side="left", padx=6)
 
         tab.columnconfigure(0, weight=1)
 
@@ -416,14 +689,36 @@ class ComponentsWindow(tk.Toplevel):
         if not self.selected_conn_id:
             return
         try:
-            Pe = self.ld_Pe.get_quantity()
-            cos_phi = float(self.ld_cos.get().replace(",", "."))
-            if not (0 < cos_phi <= 1.0):
-                raise ValueError("cos phi must be in (0, 1].")
             # U_l optional: if empty, keep None so NetworkTopology sets it to U_n
             Ul_raw = self.ld_Ul.value_var.get().strip()
             Ul = None if Ul_raw == "" else self.ld_Ul.get_quantity()
-            self.project.connections[self.selected_conn_id].load = Load(U_l=Ul, cos_phi=cos_phi, P_e=Pe)
+
+            cos_phi = float(self.ld_cos.get().replace(",", "."))
+            if not (0 < cos_phi <= 1.0):
+                raise ValueError("cos phi must be in (0, 1].")
+
+            Pe_raw = self.ld_Pe.value_var.get().strip()
+            Pe = None if Pe_raw == "" else self.ld_Pe.get_quantity()
+
+            Pm_raw = self.ld_Pm.value_var.get().strip()
+            Pm = None if Pm_raw == "" else self.ld_Pm.get_quantity()
+
+            eta = self.ld_eta.get_quantity()
+            if not (0 < eta.m <= 100):
+                raise ValueError("efficiency must be (0, 100] %.")
+
+            ku = float(self.ld_ku.get().replace(",", "."))
+            if not (0 < ku <= 1.0):
+                raise ValueError("utilization factor must be in (0, 1].")
+
+            self.project.connections[self.selected_conn_id].load = Load(
+                U_l=Ul,
+                cos_phi=cos_phi,
+                P_e=Pe,
+                P_m=Pm,
+                eta=eta,
+                k_u=ku
+            )
         except Exception as e:
             show_error(self, "Load", str(e))
             return
@@ -457,10 +752,16 @@ class ComponentsWindow(tk.Toplevel):
         conn = self.project.connections[conn_id]
         if conn.load is None:
             # clear fields
-            self.ld_Pe.set_quantity(Q_(0, "W"))
-            self.ld_cos.set("0.8")
             self.ld_Ul.set_quantity(None)
+            self.ld_cos.set("0.8")
+            self.ld_Pe.set_quantity(None)
+            self.ld_Pm.set_quantity(None)
+            self.ld_eta.set_quantity(Q_(100, 'pct'))
+            self.ld_ku.set("1.0")
         else:
-            self.ld_Pe.set_quantity(conn.load.P_e)
-            self.ld_cos.set(str(conn.load.cos_phi))
             self.ld_Ul.set_quantity(conn.load.U_l)
+            self.ld_cos.set(str(conn.load.cos_phi))
+            self.ld_Pe.set_quantity(conn.load.P_e)
+            self.ld_Pm.set_quantity(conn.load.P_m)
+            self.ld_eta.set_quantity(conn.load.eta)
+            self.ld_ku.set(str(conn.load.k_u))
