@@ -5,7 +5,10 @@ from .. import Quantity, Q_, VoltReference, PhaseSystem
 
 __all__ = [
     "load_current",
-    "voltage_drop"
+    "voltage_drop",
+    "delta_to_star",
+    "star_to_delta",
+    "R_cond"
 ]
 
 
@@ -122,3 +125,24 @@ def star_to_delta(
     Z_b = num / Z_beta
     Z_c = num / Z_gamma
     return Q_(Z_a, 'ohm'), Q_(Z_b, 'ohm'), Q_(Z_c, 'ohm')
+
+
+def R_cond(rho: Quantity, L: Quantity, S: Quantity) -> Quantity:
+    """
+    Returns the ohmic resistance of a conductor.
+
+    Parameters
+    ----------
+    rho: Quantity
+        Resistivity of conductor material.
+    L: Quantity
+        Conductor length.
+    S: Quantity
+        Cross-sectional area of conductor.
+
+    Returns
+    -------
+    Quantity
+    """
+    R = rho * L / S
+    return R.to('ohm')

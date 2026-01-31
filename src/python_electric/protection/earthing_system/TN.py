@@ -61,8 +61,8 @@ class LineToExposedConductivePartFault:
         self.S_pe = S_pe
         conductor_material = CONDUCTOR_PROPS[conductor_material]
         self.rho = 1.25 * conductor_material.resistivity20
-        self.R_phase = self._get_R(L, S_phase, self.rho)
-        self.R_pe = self._get_R(L, S_pe, self.rho)
+        self._R_phase = self._get_R(L, S_phase, self.rho)
+        self._R_pe = self._get_R(L, S_pe, self.rho)
 
     @staticmethod
     def _get_R(L: float, S: float, rho: float) -> float:
@@ -86,7 +86,7 @@ class LineToExposedConductivePartFault:
         -------
         Quantity
         """
-        I_f = 0.8 * self.U_phase / (self.R_phase + self.R_pe)
+        I_f = 0.8 * self.U_phase / (self._R_phase + self._R_pe)
         return Q_(I_f, 'A')
 
     @property
@@ -100,7 +100,7 @@ class LineToExposedConductivePartFault:
         Quantity
         """
         I_f = self.I_fault.to('A').m
-        U_f = self.R_pe * I_f
+        U_f = self._R_pe * I_f
         return Q_(U_f, 'V')
 
     def L_max(self, I_m_cb: Quantity) -> Quantity:
@@ -113,6 +113,14 @@ class LineToExposedConductivePartFault:
         m = self.S_phase / self.S_pe
         L_max = 0.8 * self.U_phase * self.S_phase / (self.rho * I_m_cb * (1 + m))
         return Q_(L_max, 'm')
+
+    @property
+    def R_pe(self) -> Quantity:
+        return Q_(self._R_pe, 'ohm')
+
+    @property
+    def R_phase(self) -> Quantity:
+        return Q_(self._R_phase, 'ohm')
 
 
 class LineToExtraneousConductivePartFault:
@@ -346,4 +354,5 @@ def check_earthing_resistance(
         t_contact_max=t_c_max,
     )
     res.passed = True
+    res.uI = "A"
     return res

@@ -13,6 +13,7 @@ import math
 from enum import StrEnum, IntEnum
 from dataclasses import dataclass, field
 
+from ... import Quantity, Q_
 from ...utils.lookup_table import LookupTable
 from ...materials import (
     ConductorMaterial,
@@ -33,7 +34,9 @@ __all__ = [
     "get_size",
     "set_size",
     "get_nominal_current",
-    "NominalCurrentError"
+    "NominalCurrentError",
+    "get_stdcsa",
+    "STDCSA"
 ]
 
 # ------------------------------------------------------------------------------
@@ -43,6 +46,29 @@ class NominalCurrentError(Exception):
     pass
 
 # ------------------------------------------------------------------------------
+# Cross-sectional area: general
+
+# List with standardized conductor cross-sectional areas in mm²
+STDCSA = [
+    1.5, 2.5, 4,   6,
+    10,  16,  25,  35,  50, 70, 95,
+    120, 150, 185, 240, 300
+]
+
+def get_stdcsa(S: Quantity) -> Quantity:
+    """Returns the standard cross-sectional area closest to S."""
+    mS = S.to('mm**2').m
+    deltaS = [abs(mS - S_std) for S_std in STDCSA]
+    deltaS_min = min(deltaS)
+    i_min = deltaS.index(deltaS_min)
+    S_std = STDCSA[i_min]
+    if S_std < mS:
+        S_std = STDCSA[min(i_min + 1, len(STDCSA) - 1)]
+    return Q_(S_std, 'mm**2')
+
+
+# ------------------------------------------------------------------------------
+# Cable sizing
 
 def _create_unburied_group_correction_table() -> LookupTable:
     """

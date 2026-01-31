@@ -114,7 +114,7 @@ class CableInput(ComponentInput):
     cable_arrangement: CableArrangement = CableArrangement.MULTICORE
     num_other_circuits: int = 0
     h3_fraction: float = 0.0
-    sizing_based_on_I_nom: bool = False
+    sizing_based_on_I_n: bool = False
     earthing_system: EarthingSystem | None = None
     phase_system: PhaseSystem = PhaseSystem.PH3
     z0_r_factor: float = 3.0
@@ -144,7 +144,7 @@ class CableInput(ComponentInput):
             cable_arrangement=self.cable_arrangement,
             num_other_circuits=self.num_other_circuits,
             h3_fraction=self.h3_fraction,
-            sizing_based_on_I_nom=self.sizing_based_on_I_nom,
+            sizing_based_on_I_n=self.sizing_based_on_I_n,
             earthing_system=self.earthing_system,
             phase_system=self.phase_system,
             z0_r_factor=self.z0_r_factor,
@@ -437,6 +437,13 @@ class NetworkTopology:
             )
         self._loads[conn_id] = load
 
+    def iter_all_connections(self) -> Iterator[Connection]:
+        """
+        Returns an iterator over the connections in the network.
+        """
+        for connection in self._nw_graph.connections.values():
+            yield connection
+
     def add_component(
         self,
         conn_id: str,
@@ -655,9 +662,38 @@ class NetworkTopology:
         *,
         safety_factor_Icu: float = 1.0,
         icu_series: Sequence[Quantity | float] | None = None,
-        km_grid: Sequence[float] | None = None,
+        km_range: Sequence[float] | None = None,
         prefer_adjustable: bool = False,
     ) -> CircuitBreakerSuggestion:
+        """
+        Returns a suggestion for a circuit breaker that protects the cable
+        against overload and short-circuit faults.
+
+        Parameters
+        ----------
+        cable_id: str
+            ID of the cable in the network to be protected by the circuit
+            breaker.
+        safety_factor_Icu: float, default 1.0
+            Adds an extra safety margin between the calculated maximum
+            short-circuit current and the ultimate breaking capacity of the
+            circuit breaker.
+        icu_series: Sequence[Quantity | float], optional
+            Range of ultimate breaking capacitities the advisor can choose from.
+        km_range: Sequence[float], optional
+            k_m is the ratio of the rated short-circuit current I_m to the
+            thermal current setting I_r of an industrial, adjustable circuit
+            breaker. km_range is the range of k_m values the advisor can choose
+            from.
+        prefer_adjustable: bool, default False
+            Indicates that an industrial adjustable circuit breaker is
+            preferred over an industrial circuit breaker with a fixed tripping
+            curve.
+
+        Returns
+        -------
+        CircuitBreakerSuggestion
+        """
         cable, _ = self.get_cable(cable_id)
 
         advisor = CircuitBreakerAdvisor(
@@ -665,7 +701,7 @@ class NetworkTopology:
             standard=self.cb_standard,
             safety_factor_Icu=safety_factor_Icu,
             icu_series=icu_series,
-            km_grid=km_grid,
+            km_grid=km_range,
             prefer_adjustable=prefer_adjustable
         )
 
@@ -707,9 +743,9 @@ class NetworkTopology:
         I_cu: Quantity
             Ultimate breaking capacity of the circuit breaker.
         k_m: float, optional
-            Multiplication factor that determines the rated magnetic trip
-            current as a multiple of the thermal current setting if the circuit
-            breaker is of the industrial type and adjustable.
+            Multiplication factor that determines the rated short-circuit
+            tripping current I_m as a multiple of the thermal current setting
+            I_r if the circuit breaker is of the industrial type and adjustable.
         E_t: Quantity, optional
             Thermal energy (I²t) let through by the circuit breaker at the
             calculated maximum short-circuit current during the interruption
@@ -744,16 +780,61 @@ class NetworkTopology:
         )
         return cable.circuit_breaker
 
-    def plot_cable(self, cable_id: str) -> LineChart:
+    def cable_plot(self, cable_id: str) -> LineChart:
+        """
+        Returns a LineChart object with a plot of the cable characteristic to
+        which the circuit-breaker current settings and the calculated
+        short-circuit currents are indicated.
+
+        Returns
+        -------
+        LineChart
+        """
         cable, _ = self.get_cable(cable_id)
         plt = plot_cable(cable)
         return plt
 
-    def check_selectivity(self, up_id: str, down_id: str) -> SelectivityResult:
+    def check_selectivity(self, upcable_id: str, downcable_id: str) -> SelectivityResult:
+        """
+        Checks whether selectivity exists between an upstream circuit breaker
+        and a downstream circuitbreaker.
+
+        Parameters
+        ----------
+        upcable_id: str
+            ID of the upstream cable.
+        downcable_id: str
+            ID of the downstream cable.
+
+        Returns
+        -------
+        SelectivityResult
+            exists: bool
+                True if current-based selectivity exists between the downstream
+                and upstream circuit breaker, i.e., if the time-current
+                characteristic curve of the upstream circuit breaker is completely
+                to the right of the curve of the downstream circuit breaker.
+            total: bool
+                True if current-based selectivity exists and the calculated
+                maximum short-circuit current in the downstream cable is smaller
+                than the minimum magnetic tripping current of the upstream circuit
+                breaker.
+            t_trip_max: Quantity, optional
+            t_margin: Quantity, optional
+                Are both set when the upstream circuit breaker is of the industrial
+                type and adjustable, current based selectivity exists, but the
+                selectivity is not total by itself.
+                t_trip_max is the maximum allowable tripping time of the upstream
+                circuit breaker taking account of the Joule-integral of the upstream
+                cable, and also the maximum allowable fault duration to ensure
+                protection against indirect contact (assuming a TN-earthing-system).
+                t_margin is the margin between `t_trip_max` and `t_m`, the
+                magnetic tripping-time limit of the circuit breaker.
+        """
         from python_electric.network.components import cable
 
-        cable_up, _ = self.get_cable(up_id)
-        cable_down, _ = self.get_cable(down_id)
+        cable_up, _ = self.get_cable(upcable_id)
+        cable_down, _ = self.get_cable(downcable_id)
 
         res = cable.check_selectivity(
             cable_up, cable_down,
@@ -791,24 +872,21 @@ class NetworkTopology:
         """
         pe_conductor_cfg = self._glob_pe_cfg if pe_conductor_cfg is None else pe_conductor_cfg
 
-        # Get minimum short-circuit current
+        # TODO: need more thought (minimum short-circuit must be caused by LG-fault)
         cable, conn = self.get_cable(cable_id)
-        sc_res = self.get_shortcircuit_current(conn.end.name, self.ShortCircuitCase.MIN)
-
+        sc = self.get_shortcircuit_current(conn.end.name, self.ShortCircuitCase.MIN)
         pe_conductor = PEConductor(
             conductor_material=pe_conductor_cfg.cond_mat,
             insulation_material=pe_conductor_cfg.insul_mat,
-            separated=pe_conductor_cfg.separated
+            separated=pe_conductor_cfg.separated,
+            S_ph=cable.S * cable.n_phase
         )
-        S_pe = pe_conductor.cross_section_area(
-            If=sc_res.min,
-            t_interrupt=pe_conductor_cfg.t_interrupt,
-            mech_protected=pe_conductor_cfg.mech_protected
+        S_pe = pe_conductor.csa(
+            If=sc.min,
+            ti=pe_conductor_cfg.t_interrupt,
+            mech_prot=pe_conductor_cfg.mech_protected
         )
-        if not pe_conductor.separated and S_pe < cable.S:
-            cable.S_pe = cable.S
-        else:
-            cable.S_pe = S_pe
+        cable.S_pe = S_pe
         return S_pe
 
     def size_all_pe_conductors(self):
@@ -824,49 +902,22 @@ class NetworkTopology:
                     "configuration.", category=UserWarning
                 )
             self.run_shortcircuit_calc()
-
         cables = self._nw_graph.find_components(Cable)
         for cable, *_, end_id in cables:
             pe_conductor = PEConductor(
                 self._glob_pe_cfg.cond_mat,
                 self._glob_pe_cfg.insul_mat,
-                self._glob_pe_cfg.separated
+                self._glob_pe_cfg.separated,
+                S_ph=cable.S * cable.n_phase
             )
-            S_pe = pe_conductor.cross_section_area(
-                cable.I_sc_min,
+            S_pe = pe_conductor.csa(
+                cable.I_sc_min,  # TODO: need more thought (minimum short-circuit must be caused by LG-fault)
                 self._glob_pe_cfg.t_interrupt,
                 self._glob_pe_cfg.mech_protected
             )
-            if pe_conductor.separated:
-                if cable.S <= Q_(16, 'mm ** 2'):
-                    cable.S_pe = max(S_pe, cable.S)
-                elif Q_(16, 'mm ** 2') < cable.S <= Q_(35, 'mm ** 2'):
-                    cable.S_pe = max(S_pe, Q_(16, 'mm ** 2'))
-                elif cable.S > Q_(35, 'mm ** 2'):
-                    cable.S_pe = max(S_pe, PEConductor.get_std_csa(cable.S / 2))
-            else:
-                cable.S_pe = max(S_pe, cable.S)
+            cable.S_pe = S_pe
 
-    # def add_circuit_breakers(self):
-    #     """
-    #     Adds a circuit-breaker to all cables in the network at once.
-    #     """
-    #     if not self._sc_dict:
-    #         if self._sc_glob_config is None:
-    #             warnings.warn(
-    #                 "Short-circuit currents have not been calculated yet. "
-    #                 "These are calculated now with a default short-circuit "
-    #                 "configuration.", category=UserWarning
-    #             )
-    #         self.run_short_circuit_calculation()
-    #
-    #     cables = self._network.find_components(Cable)
-    #
-    #     for cable, conn_id, *_ in cables:
-    #         cable = typing.cast(Cable, cable)
-    #         cable.connect_circuit_breaker()
-
-    def get_voltage_drop_of_conn(self, conn_id: str) -> tuple[Quantity, Quantity]:
+    def get_conn_voltage_drop(self, conn_id: str) -> tuple[Quantity, Quantity]:
         """
         Returns the absolute and relative voltage drop across the specified
         connection.
@@ -883,7 +934,7 @@ class NetworkTopology:
             dU_rel += comp.dU_rel
         return dU, dU_rel
 
-    def get_voltage_drop_at_bus(
+    def get_bus_voltage_drop(
         self,
         bus_id: str,
         *,
@@ -945,7 +996,7 @@ class NetworkTopology:
         dU = Q_(0.0, "V")
         dU_rel = Q_(0.0, "pct")
         for conn_id in conn_path:
-            dU_i, dU_rel_i = self.get_voltage_drop_of_conn(conn_id)
+            dU_i, dU_rel_i = self.get_conn_voltage_drop(conn_id)
             dU += dU_i
             dU_rel += dU_rel_i
 

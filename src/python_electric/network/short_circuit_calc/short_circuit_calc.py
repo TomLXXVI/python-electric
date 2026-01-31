@@ -120,6 +120,7 @@ class ShortCircuitCalc:
 
         def __call__(self, bus_id: str) -> ShortCircuitResult:
             self._fault = self._standard_fault
+
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=AbsentNodeWarning)
                 try:
@@ -132,9 +133,12 @@ class ShortCircuitCalc:
                         raise err
 
             If_abc_pu = self._fault.get_fault_current_abc()
+
             bus = self.nw.graph.busses[bus_id]
+
             pu_sys = PerUnitSystem(self.config.S_base, bus.U_base)
             If_abc = pu_sys.get_actual_current(If_abc_pu.flatten())
+
             # noinspection PyUnresolvedReferences
             return ShortCircuitResult(
                 min=max(abs(If_abc[0]), abs(If_abc[1]), abs(If_abc[2])),

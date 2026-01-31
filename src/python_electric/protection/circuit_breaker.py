@@ -116,9 +116,9 @@ class CircuitBreaker:
             Thermal energy (I²t) let through by the circuit breaker at the
             calculated maximum short-circuit current during interruption time.
         k_m: float, optional
-            Multiplication factor that determines the rated magnetic trip 
-            current as a multiple of the thermal current setting if the circuit 
-            breaker is of the industrial type and adjustable.
+            Multiplication factor that determines the rated short-circuit trip
+            current I_m as a multiple of the thermal current setting I_r if the
+            circuit breaker is of the industrial type and adjustable.
         t_m: Quantity, optional
             Upper limit for the instantaneous magnetic tripping time with regard
             to short-circuits. By default, this time limit is set to 100 ms
@@ -404,8 +404,8 @@ class CircuitBreaker:
         s += f"I_nf    = {self.I_nf.to('A'):~P.1f}\n"
         s += f"I_f     = {self.I_f.to('A'):~P.1f}\n"
         s += f"t_conv  = {self.t_conv.to('h'):~P.1f}\n"
-        s += f"I_m_min = {self.I_m_min.to('A'):~P.1f}\n"
-        s += f"I_m_max = {self.I_m_max.to('A'):~P.1f}\n"
+        s += f"I_m_min = {self.I_m_min.to('kA'):~P.1f}\n"
+        s += f"I_m_max = {self.I_m_max.to('kA'):~P.1f}\n"
         s += f"t_m     = {self.t_m.to('ms'):~P.1f}"
         return s
 

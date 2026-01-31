@@ -94,7 +94,7 @@ class Cable(Component):
     h3_fraction: float = 0.0
         Fraction of third-order harmonics present in the total load current;
         a number between 0.0 and 1.0.
-    sizing_based_on_I_nom: bool = False
+    sizing_based_on_I_n: bool = False
         Indicates that the determination of the cross-sectional area of the
         conductors should be based on the standardized nominal current which is
         just greater than the rated load current. If False, conductors are sized
@@ -117,7 +117,7 @@ class Cable(Component):
         Scaling factor applied to the negative-sequence reactance of the
         cable to determine its zero-sequence reactance.
     n_phase: int, default 1
-        Number of parallel single-core cables per phase.
+        Number of parallel conductors/single-core cables per phase.
 
     Attributes
     ----------
@@ -202,7 +202,7 @@ class Cable(Component):
     cable_arrangement: CableArrangement = CableArrangement.MULTICORE
     num_other_circuits: int = 1
     h3_fraction: float = 0.0
-    sizing_based_on_I_nom: bool = False
+    sizing_based_on_I_n: bool = False
     earthing_system: EarthingSystem = EarthingSystem.TN
     phase_system: PhaseSystem = PhaseSystem.PH3
 
@@ -244,7 +244,8 @@ class Cable(Component):
             try:
                 self._configure_cable()
             except NominalCurrentError:
-                self.sizing_based_on_I_nom = True
+                if not self.sizing_based_on_I_n:
+                    self.sizing_based_on_I_n = True
                 continue
             except CurrentOverflowError:
                 if i < i_max - 1:
@@ -261,6 +262,8 @@ class Cable(Component):
                     f"A suitable conductor cross-section could not be "
                     f"determined for load current {self.I_b_ph.to('A'):~P.3f}."
                 )
+            else:
+                break
 
         self.Z_dict = self._calc_impedance_dict()
         self.dU, self.dU_rel = self.get_voltage_drop(self.U_l, self.I_b_ph, self.cos_phi)
@@ -309,7 +312,7 @@ class Cable(Component):
         self,
         cd: CableData
     ) -> None:
-        cd = get_size(cd, self.sizing_based_on_I_nom)
+        cd = get_size(cd, self.sizing_based_on_I_n)
         self.S = Q_(cd.S, 'mm**2')
         self.I_z = Q_(cd.I_z, 'A')
         self.I_z0 = Q_(cd.I_z0, 'A')
@@ -328,6 +331,37 @@ class Cable(Component):
         self.I_z0 = Q_(cd.I_z0, 'A')
         self.I_n = Q_(cd.I_n, 'A')
         self.I2t = Q_(cd.I2t, 'A**2*s')
+        return None
+
+    def resize(
+        self,
+        n_phase: int = 1,
+        S: Quantity | None = None,
+        sizing_based_on_I_n: bool = False
+    ) -> None:
+        """
+        Resizes the cable in place.
+
+        Parameters
+        ----------
+        S: Quantity, optional
+            New cross-sectional area of the loaded cable conductors.
+        n_phase: int, default 1
+            New number of parallel conductors/single-core cables per phase.
+        sizing_based_on_I_n: bool = False
+            Indicates that the determination of the cross-sectional area of the
+            conductors should be based on the standardized nominal current which
+            is just greater than the rated load current. If False, conductors
+            are sized based on rated load current.
+
+        Returns
+        -------
+        None
+        """
+        self.n_phase = n_phase
+        self.S = S
+        self.sizing_based_on_I_n = sizing_based_on_I_n
+        self.__post_init__()
         return None
 
     def get_impedance(
@@ -588,10 +622,10 @@ class Cable(Component):
     def S_pe(self, v: Quantity) -> None:
         if self.earthing_system.is_TN_C() and self.S.to('mm**2').m > 35.0:
             S_pe = self.S.to('mm ** 2').m / 2
-            delta = [abs(S_pe - S_std) for S_std in PEConductor.STD_SIZES]
+            delta = [abs(S_pe - S_std) for S_std in STDCSA]
             delta_min = min(delta)
             i_min = max(i for i, v in enumerate(delta) if v == delta_min)
-            self._S_pe = Q_(PEConductor.STD_SIZES[i_min], 'mm**2')
+            self._S_pe = Q_(STDCSA[i_min], 'mm**2')
         else:
             self._S_pe = v
 
@@ -609,7 +643,9 @@ class Cable(Component):
         Returns the nominal current through multiple parallel single-core
         cables per phase.
         """
-        return self.I_n * self.n_phase
+        mI_b_ph = self.I_b_ph.to('A').m
+        mI_n_ph = get_nominal_current(mI_b_ph)
+        return Q_(mI_n_ph, 'A')
 
     @property
     def I_z0_ph(self) -> Quantity:
@@ -749,7 +785,7 @@ class SelectivityResult:
         if self.t_trip_max is not None:
             s += f"maximum allowable tripping-time upstream circuit breaker: "
             s += f"{self.t_trip_max.to('ms'):~P.0f}\n"
-            s += f"available tripping-delay margin: "
+            s += f"available margin for tripping-delay: "
             s += f"{self.t_margin.to('ms'):~P.0f}"
         return s
 
@@ -784,13 +820,13 @@ def check_selectivity(
         total: bool
             True if current based selectivity exists and the calculated
             maximum short-circuit current in the downstream cable is smaller
-            than the minimum magnetic tripping current of the upstream circuit
-            breaker.
+            than the minimum short-circuit tripping current of the upstream
+            circuit breaker.
         t_trip_max: Quantity, optional
         t_margin: Quantity, optional
             Are both set when the upstream circuit breaker is of the industrial
             type and adjustable, current based selectivity exists, but the
-            selectivity is not total.
+            selectivity is not total by itself.
             `t_trip_max` is the maximum allowable tripping time of the upstream
             circuit breaker taking account of the Joule-integral of the upstream
             cable, and also the maximum allowable fault duration to ensure

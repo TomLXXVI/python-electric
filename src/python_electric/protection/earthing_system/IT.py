@@ -186,8 +186,8 @@ class ITDoubleFault:
             self._R_e = None
         else:
             self._R_e = R_e.to('ohm').m
-            R_phase = self._TN_fault.R_phase
-            R_pe = self._TN_fault.R_pe
+            R_phase = self._TN_fault._R_phase
+            R_pe = self._TN_fault._R_pe
             U = U.to('V').m
             self._I_fault = 0.8 * U / (R_phase + R_pe + 2 * self._R_e)
             self._U_fault = (R_pe + self._R_e) * self._I_fault
@@ -446,9 +446,13 @@ def check_earthing_resistance(
         t_c_max = min(fault.t_contact_max.to('ms'), t_c_max_iec.to('ms'))
     else:
         t_c_max = fault.t_contact_max
-    return IndirectContactProtectionResult(
+    r = IndirectContactProtectionResult(
         I_f=fault.I_fault,
         U_f=fault.U_fault,
         R_e_max=fault.R_e_max,
         t_contact_max=t_c_max
     )
+    r.passed = True
+    r.uI = "A"
+    return r
+

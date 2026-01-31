@@ -24,7 +24,11 @@ from .exceptions import (
     AmpacityError
 )
 
-__all__ = ["get_cross_sectional_area", "get_ampacity"]
+__all__ = ["get_cross_sectional_area", "get_ampacity", "STD_CSA_LIST"]
+
+
+# List with standardized conductor cross-sectional areas in mm²
+STD_CSA_LIST = [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120, 150, 185, 240]
 
 
 def _create_index_table():
@@ -56,7 +60,7 @@ def _create_index_table():
 
 def _create_copper_table() -> LookupTable:
     col_header = [j for j in range(12)]
-    row_header = [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120, 150, 185, 240]
+    row_header = STD_CSA_LIST
     nan = float("nan")
     data = [
         [13.0, 13.5, 14.5,  15.5,  17.0,  18.5,  20.0,  22.0,  23.0,  24.0,  26.0,   nan],
@@ -89,7 +93,7 @@ def _create_copper_table() -> LookupTable:
 
 def _create_aluminium_table() -> LookupTable:
     col_header = [j for j in range(12)]
-    row_header = [2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120, 150, 185, 240]
+    row_header = STD_CSA_LIST
     nan = float("nan")
     data = [
         [13.5, 14.0, 15.0,  16.5,  18.5,  19.5,  21.0,  23.0,  24.0,  26.0,  28.0,   nan],

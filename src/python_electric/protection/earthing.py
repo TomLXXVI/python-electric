@@ -5,18 +5,23 @@ from dataclasses import dataclass, field
 from .. import Quantity, Q_
 from ..utils.lookup_table import LookupTable
 from ..materials import ConductorMaterial, InsulationMaterial, Soil, SOIL_RESISTIVITY
+from ..sizing import get_stdcsa
+
 
 __all__ = [
-    "LoopEarthElectrode",
-    "RodEarthElectrode",
+    "EarthLoopElectrode",
+    "EarthRodElectrode",
     "PEConductor",
-    "EarthConductor"
+    "EarthingConductor"
 ]
+
 
 PI = math.pi
 
+# ------------------------------------------------------------------------------
+# Look-up table k-factor - PE-conductor separated.
 
-def create_k_factor_table_1():
+def create_k_table_separated():
     row_header = [
         ConductorMaterial.COPPER.value,
         ConductorMaterial.ALUMINIUM.value,
@@ -27,11 +32,7 @@ def create_k_factor_table_1():
         InsulationMaterial.EPR.value,
         InsulationMaterial.B.value
     ]
-    data = [
-        [143, 176, 160],
-        [95,  116, 110],
-        [52,   64,  60]
-    ]
+    data = [[143, 176, 160], [95,  116, 110], [52,   64,  60]]
     description = "k-factors for insulated PE-conductors not part of a cable"
     cols_description = "insulation type"
     rows_description = "conductor material"
@@ -44,7 +45,8 @@ def create_k_factor_table_1():
     return lookup_table
 
 
-def create_k_factor_table_2():
+# Look-up table k-factor - PE-conductor part of multicore table
+def create_k_table_multicore():
     row_header = [
         ConductorMaterial.COPPER.value,
         ConductorMaterial.ALUMINIUM.value,
@@ -54,10 +56,7 @@ def create_k_factor_table_2():
         InsulationMaterial.EPR.value,
         InsulationMaterial.B.value
     ]
-    data = [
-        [115, 143, 134],
-        [76,   94,  89],
-    ]
+    data = [[115, 143, 134], [76,   94,  89]]
     description = "k-factors for PE-conductors part of a multicore cable"
     cols_description = "insulation type"
     rows_description = "conductor material"
@@ -70,8 +69,8 @@ def create_k_factor_table_2():
     return lookup_table
 
 
-tbl_k_factor_1 = create_k_factor_table_1()
-tbl_k_factor_2 = create_k_factor_table_2()
+ktbl_separated = create_k_table_separated()
+ktbl_multicore = create_k_table_multicore()
 
 
 class EarthElectrode(ABC):
@@ -81,7 +80,7 @@ class EarthElectrode(ABC):
         pass
 
 @dataclass
-class LoopEarthElectrode(EarthElectrode):
+class EarthLoopElectrode(EarthElectrode):
     wire_diameter: Quantity
     area: Quantity
 
@@ -101,7 +100,7 @@ class LoopEarthElectrode(EarthElectrode):
 
 
 @dataclass
-class RodEarthElectrode(EarthElectrode):
+class EarthRodElectrode(EarthElectrode):
     diameter: Quantity
     length: Quantity
 
@@ -118,51 +117,45 @@ class RodEarthElectrode(EarthElectrode):
 
 @dataclass
 class PEConductor:
-    STD_SIZES = [
-        1.5, 2.5, 4, 6, 10,
-        16, 25, 35, 50, 70, 95,
-        120, 150, 185, 240, 300
-    ]  # mm²
     conductor_material: ConductorMaterial
     insulation_material: InsulationMaterial
     separated: bool
+    S_ph: Quantity | None = None
 
     k: float = field(init=False, default=0.0)
-    S: Quantity = field(init=False, default=None)
+    S_pe: Quantity = field(init=False, default=None)
 
     def __post_init__(self):
         if self.insulation_material == InsulationMaterial.PRC:
-            self._insul_mat = InsulationMaterial.EPR
-        else:
-            self._insul_mat = self.insulation_material
+            self.insulation_material = InsulationMaterial.EPR
 
+        # Get k-factor.
         if self.separated:
-            self.k = tbl_k_factor_1.data_value(
+            self.k = ktbl_separated.data_value(
                 self.conductor_material,
-                self._insul_mat
+                self.insulation_material
             )
         else:
-            self.k = tbl_k_factor_2.data_value(
+            self.k = ktbl_multicore.data_value(
                 self.conductor_material,
-                self._insul_mat
+                self.insulation_material
             )
 
-    @classmethod
-    def get_std_csa(cls, S: Quantity) -> Quantity:
-        S_mag = S.to('mm**2').m
-        delta_S = [abs(S_mag - S_std) for S_std in cls.STD_SIZES]
-        delta_S_min = min(delta_S)
-        i_min = delta_S.index(delta_S_min)
-        S_std = cls.STD_SIZES[i_min]
-        if S_std < S_mag:
-            S_std = cls.STD_SIZES[min(i_min + 1, len(cls.STD_SIZES) - 1)]
-        return Q_(S_std, 'mm**2')
+    def csa_adiabatic(self, If: Quantity, ti: Quantity) -> Quantity:
+        """
+        Calculates the standardized csa of the PE-conductor assuming adiabatic
+        heating of the conductor during the fault.
+        """
+        If = If.to('A').m
+        ti = min(ti.to('s').m, 5.0)
+        S_pe = get_stdcsa(Q_(If * math.sqrt(ti) / self.k, 'mm**2'))
+        return S_pe
 
-    def cross_section_area(
+    def csa(
         self,
         If: Quantity,
-        t_interrupt: Quantity,
-        mech_protected: bool = True
+        ti: Quantity,
+        mech_prot: bool = True
     ) -> Quantity:
         """
         Returns the standardized cross-sectional area for the PE-conductor.
@@ -171,45 +164,53 @@ class PEConductor:
         ----------
         If: Quantity
             Fault current that may flow through the PE-conductor.
-        t_interrupt: Quantity
-            Time before the protective device has completely interrupted the
-            fault current.
-        mech_protected: bool
+        ti: Quantity
+            Time the protective device needs to interrupt the fault current
+            completely. This time is limited to 5 s.
+        mech_prot: bool
             Indicates whether the PE-conductor is mechanically protected, e.g.
-            PE-conductor in a conduit.
+            a PE-conductor in a conduit.
 
         Returns
         -------
         Quantity
         """
-        If = If.to('A').m
-        t_interrupt = t_interrupt.to('s').m
-        if t_interrupt > 5.0:
-            raise ValueError("Maximum interruption time is 5 s.")
+        # First calculate the csa assuming adiabatic heating during the fault
+        S_pe_cal = self.csa_adiabatic(If, ti)
 
-        S_cal = If * math.sqrt(t_interrupt) / self.k
-        S_std = self.get_std_csa(Q_(S_cal, 'mm**2'))
-        if mech_protected:
-            S = max(S_std.m, 2.5)
+        # Rule-based determination of S_pe
+        if self.separated:
+            if Q_(0.0, 'mm**2') < self.S_ph <= Q_(16, 'mm ** 2'):
+                S_pe = Q_(max(self.S_ph.m, 2.5 if mech_prot else 4.0), 'mm**2')
+            elif Q_(16, 'mm ** 2') < self.S_ph <= Q_(35, 'mm ** 2'):
+                S_pe = Q_(16, 'mm ** 2')
+            else:   # self.S_ph > Q_(35, 'mm ** 2'):
+                S_pe = get_stdcsa(self.S_ph / 2)
+            self.S_pe = max(S_pe_cal, S_pe)
         else:
-            S = max(S_std.m, 4.0)
-        self.S = Q_(S, 'mm ** 2')
-        return self.S
+            # PE = part of multicore cable -> same as S_ph
+            self.S_pe = self.S_ph
+        return self.S_pe
 
 
-class EarthConductor(PEConductor):
+class EarthingConductor(PEConductor):
 
-    def cross_section_area(
+    def csa(
         self,
         If: Quantity,
-        t_interrupt: Quantity,
-        mech_protected: bool = True
+        ti: Quantity,
+        mech_prot: bool = True
     ) -> Quantity:
-        S = super().cross_section_area(If, t_interrupt, False)
-        if mech_protected:
-            S = max(S.m, 16.0)
+        """
+        Returns the standardized cross-sectional area for the earthing
+        conductor that connects with the earth electrode.
+        """
+        S_pe = self.csa_adiabatic(If, ti)
+        if mech_prot:
+            S_pe = max(S_pe, Q_(16.0, 'mm**2'))
         elif self.conductor_material == ConductorMaterial.COPPER:
-            S = max(S.m, 25.0)
+            S_pe = max(S_pe, Q_(25.0, 'mm**2'))
         else:
-            S = max(S.m, 50.0)
-        return Q_(S, 'mm ** 2')
+            S_pe = max(S_pe, Q_(50.0, 'mm**2'))
+        self.S_pe = S_pe
+        return self.S_pe

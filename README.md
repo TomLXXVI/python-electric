@@ -12,12 +12,12 @@ Typical applications include:
 
 * Cable sizing
 * Voltage drop calculation
-* Short-circuit calculations (maximum and minimum fault currents)
-* Circuit breaker selection
+* Short-circuit calculations (maximum and minimum short-circuit currents)
+* Assistance with circuit breaker selection
 * Basic current-based selectivity analysis
 * Time-based selectivity estimation for industrial circuit breakers
-* Earthing system verification, including protection against electric shock due
-  to indirect contact
+* Protection against electric shock due to indirect contact (insulation fault 
+  via an exposed conductive part/extraneous conductive part)
 
 
 ## Design Philosophy
@@ -39,18 +39,16 @@ The typical workflow when using python-electric is:
 
 1. Assemble the network topology (busses and connections)
 2. Add electrical components to the connections (sources, transformers, cables)
-3. Perform verification checks (short-circuit currents, protection limits, earthing)
+3. Perform verification checks (voltage drops, short-circuit currents, protection limits, earthing)
 4. Inspect results and iterate on design choices
 
-Jupyter notebooks are the recommended environment for interactive use. An 
-example Jupyter notebook is provided in: `/examples/example_01/LV_design_01.ipynb`.
-This notebook demonstrates a complete design workflow and reproduces a worked
-example from the reference book *Laagspanningsinstallaties: technologie en ontwerp*.
+Jupyter notebooks are the recommended environment for interactive use. Example 
+Jupyter notebooks are provided in `/examples`.
 
 
 ## Graphical Network Builder (GUI)
 
-In addition to the core library, this repository includes an **optional GUI
+In addition to the core library, this repository also includes an **optional GUI
 package** that assists in **building the network topology** and **adding
 electrical components** in an interactive and visual way.
 
